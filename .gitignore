@@ -1,0 +1,10 @@
+# 开源仓库审查目录，仅作取材参考，不纳入交付
+reference/
+
+# 生成产物
+output/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
