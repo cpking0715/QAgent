@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 from qagent.config import QAgentConfig
-from qagent.parsing import CoverageRow, ReviewTraceRow, RiskItem, parse_risks, ref_ids
+from qagent.parsing import CoverageRow, ReviewTraceRow, RiskItem, ref_ids
 from qagent.schema import TestcaseSchema
 
 MATRIX_CATEGORIES = {"Happy", "Boundary", "Negative", "Security", "State", "Concurrency"}
