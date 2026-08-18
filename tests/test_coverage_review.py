@@ -159,3 +159,24 @@ def test_prompt_markers_and_signatures():
     )
     assert "SC-002" in user_fix or "GAP" in user_fix
     assert "矩阵" in SYSTEM or "coverage" in SYSTEM.lower() or "覆盖矩阵" in SYSTEM
+
+
+from qagent.cli import main
+
+
+def test_check_fails_without_matrix(tmp_path, capsys):
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "test-plan.md").write_text(
+        (FIXTURES / "test-plan.md").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (out / "risk.md").write_text(
+        (FIXTURES / "risk.md").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (out / "testcases.md").write_text(
+        (FIXTURES / "testcases-valid.md").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    rc = main(["check", "--out", str(out)])
+    assert rc == 1
+    assert "coverage-matrix" in capsys.readouterr().out
+
