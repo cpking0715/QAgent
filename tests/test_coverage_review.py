@@ -2,9 +2,28 @@ from pathlib import Path
 
 import pytest
 
-from qagent.parsing import _table_after_heading, parse_coverage_matrix, parse_review_trace
+from qagent.config import QAgentConfig
+from qagent.parsing import (
+    ReviewTraceRow,
+    _table_after_heading,
+    parse_coverage_matrix,
+    parse_review_trace,
+)
+from qagent.validation import validate_matrix, validate_review_trace
 
 FIXTURES = Path(__file__).parent / "fixtures"
+REPO = Path(__file__).resolve().parents[1]
+SCHEMA = REPO / "templates" / "testcase.schema.yaml"
+
+
+def _cfg(strict: bool) -> QAgentConfig:
+    return QAgentConfig(
+        workspace=REPO,
+        input_dir=REPO / "input",
+        output_dir=REPO / "output",
+        schema_path=SCHEMA,
+        strict_coverage=strict,
+    )
 
 
 def test_parse_coverage_matrix_valid():
@@ -38,3 +57,50 @@ def test_table_after_heading_no_table_stops_at_next_heading():
 """
     with pytest.raises(ValueError, match="后没有表格"):
         _table_after_heading(md, "## 1. 覆盖契约")
+
+
+def test_validate_matrix_rejects_bad_category_and_missing_r():
+    rows = parse_coverage_matrix(FIXTURES / "coverage-matrix-bad.md")
+    errors, _ = validate_matrix(rows, {"R1", "R2", "R3"}, _cfg(True))
+    assert errors
+    assert any("Foo" in e or "类别" in e for e in errors)
+    assert any("R99" in e for e in errors)
+
+
+def test_validate_matrix_strict_uncovered_requirement():
+    rows = parse_coverage_matrix(FIXTURES / "coverage-matrix.md")
+    errors, warnings = validate_matrix(rows, {"R1", "R2", "R3", "R4"}, _cfg(True))
+    assert any("R4" in e for e in errors)
+    errors2, warnings2 = validate_matrix(rows, {"R1", "R2", "R3", "R4"}, _cfg(False))
+    assert not any("R4" in e for e in errors2)
+    assert any("R4" in w for w in warnings2)
+
+
+def test_validate_review_gap_strict():
+    rows = parse_review_trace(FIXTURES / "qa-review-gap.md")
+    matrix_ids = {"SC-001", "SC-002", "SC-003"}
+    case_ids = {"TC-REG-001", "TC-REG-002", "TC-REG-003"}
+    errors, _ = validate_review_trace(rows, matrix_ids, case_ids, _cfg(True))
+    assert any("GAP" in e or "SC-002" in e for e in errors)
+
+
+def test_validate_review_covered_unknown_case():
+    rows = parse_review_trace(FIXTURES / "qa-review.md")
+    rows[0].case_id = "TC-NOPE-001"
+    errors, _ = validate_review_trace(
+        rows, {"SC-001", "SC-002", "SC-003"},
+        {"TC-REG-001", "TC-REG-002", "TC-REG-003"},
+        _cfg(True),
+    )
+    assert any("TC-NOPE-001" in e for e in errors)
+
+
+def test_validate_review_weak_is_warning():
+    rows = [
+        ReviewTraceRow("SC-001", "TC-REG-001", "WEAK"),
+    ]
+    errors, warnings = validate_review_trace(
+        rows, {"SC-001"}, {"TC-REG-001"}, _cfg(True),
+    )
+    assert not errors
+    assert warnings
