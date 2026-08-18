@@ -158,9 +158,7 @@ def _table_after_heading(text: str, heading_prefix: str) -> list[list[str]]:
     for line in lines[start:]:
         stripped = line.strip()
         if stripped.startswith("#"):
-            if in_table:
-                break
-            continue
+            break
         if not stripped.startswith("|"):
             if in_table:
                 break
