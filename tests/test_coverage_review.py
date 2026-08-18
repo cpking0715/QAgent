@@ -2,7 +2,16 @@ from pathlib import Path
 
 import pytest
 
-from qagent.config import QAgentConfig
+from qagent.agent.prompts import (
+    SYSTEM,
+    build_coverage_matrix_prompt,
+    build_fix_matrix_prompt,
+    build_fix_prompt,
+    build_qa_review_prompt,
+    build_test_plan_prompt,
+    build_testcases_prompt,
+)
+from qagent.config import QAgentConfig, resolve_config
 from qagent.pipeline import PipelineStep, check_prerequisites
 from qagent.parsing import (
     ReviewTraceRow,
@@ -127,3 +136,26 @@ def test_testcases_requires_matrix(tmp_path):
     (out / "risk.md").write_text("x", encoding="utf-8")
     errors = check_prerequisites(cfg, PipelineStep.TESTCASES)
     assert any("coverage-matrix" in e for e in errors)
+
+
+def test_prompt_markers_and_signatures():
+    cfg = resolve_config(workspace=REPO)
+    sys_m, user_m = build_coverage_matrix_prompt("treq", "plan", "risk", cfg)
+    assert "生成完整的 coverage-matrix.md" in user_m
+    assert "覆盖契约" in user_m
+    _, user_fix_m = build_fix_matrix_prompt("matrix", ["SC-001 类别非法"], "plan", cfg)
+    assert "coverage-matrix.md" in user_fix_m
+    _, user_r = build_qa_review_prompt("matrix", "cases", "plan", "risk", cfg)
+    assert "生成完整的 qa-review.md" in user_r
+    _, user_plan = build_test_plan_prompt("treq", "src", cfg)
+    assert "### 5.1 测试层级" in user_plan
+    _, user_tc = build_testcases_prompt("treq", "plan", "risk", "matrix", cfg)
+    assert "矩阵" in user_tc
+    _, user_fix = build_fix_prompt(
+        "cases", ["GAP SC-002"], "plan", cfg,
+        test_requirements_text="treq",
+        coverage_matrix_text="matrix",
+        review_text="review",
+    )
+    assert "SC-002" in user_fix or "GAP" in user_fix
+    assert "矩阵" in SYSTEM or "coverage" in SYSTEM.lower() or "覆盖矩阵" in SYSTEM
