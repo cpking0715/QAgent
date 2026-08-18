@@ -57,6 +57,14 @@ class QAgentConfig:
         return self.output_dir / "risk.md"
 
     @property
+    def coverage_matrix_path(self) -> Path:
+        return self.output_dir / "coverage-matrix.md"
+
+    @property
+    def qa_review_path(self) -> Path:
+        return self.output_dir / "qa-review.md"
+
+    @property
     def testcases_path(self) -> Path:
         return self.output_dir / "testcases.md"
 

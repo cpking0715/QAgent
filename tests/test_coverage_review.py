@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from qagent.config import QAgentConfig
+from qagent.pipeline import PipelineStep, check_prerequisites
 from qagent.parsing import (
     ReviewTraceRow,
     _table_after_heading,
@@ -104,3 +105,25 @@ def test_validate_review_weak_is_warning():
     )
     assert not errors
     assert warnings
+
+
+def test_config_artifact_paths(tmp_path):
+    cfg = QAgentConfig(
+        workspace=REPO, input_dir=tmp_path, output_dir=tmp_path / "out",
+        schema_path=SCHEMA,
+    )
+    assert cfg.coverage_matrix_path == tmp_path / "out" / "coverage-matrix.md"
+    assert cfg.qa_review_path == tmp_path / "out" / "qa-review.md"
+
+
+def test_testcases_requires_matrix(tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    cfg = QAgentConfig(
+        workspace=REPO, input_dir=tmp_path, output_dir=out, schema_path=SCHEMA,
+    )
+    (out / "test-requirements.md").write_text("x", encoding="utf-8")
+    (out / "test-plan.md").write_text("x", encoding="utf-8")
+    (out / "risk.md").write_text("x", encoding="utf-8")
+    errors = check_prerequisites(cfg, PipelineStep.TESTCASES)
+    assert any("coverage-matrix" in e for e in errors)
