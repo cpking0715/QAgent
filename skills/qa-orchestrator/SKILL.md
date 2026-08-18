@@ -48,13 +48,23 @@ Task Progress:
 
 ### Step 0：初始化
 
-独立 Agent 一键运行（无需 Cursor）：
+两条入口，择一使用：
+
+**路径 A — 独立 Agent 一键运行（无需 Cursor 分步）：**
 
 ```bash
 qagent run input/requirement-example.md --out output
 ```
 
-或在 Cursor 中手动分步：
+自动执行 Step 1–9，完成后直接查看产物，无需再手动跟进后续步骤。
+
+**路径 B — Cursor 分步流水线：**
+
+```bash
+qagent generate <需求文件> --out <输出目录>
+```
+
+初始化流水线状态后，**严格按序执行 Step 1–9**（本 Skill 后续各节）。
 
 ### Step 1：解析需求
 
@@ -63,7 +73,7 @@ qagent run input/requirement-example.md --out output
 ### Step 2：生成测试需求
 
 从 PRD + 设计文档生成 `{output_dir}/test-requirements.md`（**不是** test-plan，**不是**用例）。
-必须包含：功能/API/边界/异常/非功能清单、覆盖矩阵、PRE 追溯预备条目。目标是尽量不漏测。
+必须包含：功能/API/边界/异常/非功能清单、第 8 节覆盖矩阵（模块 × 测试类型总览，**不是** Step 5 的 `coverage-matrix.md`）、PRE 追溯预备条目。目标是尽量不漏测。
 
 模板：`templates/test-requirements-output.md`
 
