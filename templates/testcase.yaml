@@ -1,18 +1,2 @@
-# 测试用例 Schema 契约（一期 v1）
-# 所有用例必须以 YAML 块形式写入 output/testcases.md，字段定义如下。
-# 校验脚本 scripts/validate_cases.py 与导出脚本 scripts/export_xlsx.py 均依赖此契约。
-
-id: TC-REG-001              # 必填，唯一，格式 TC-<模块缩写>-<3位序号>
-title: 正确手机号注册成功     # 必填，一句话说清验证点
-priority: P0                 # 必填，枚举：P0 / P1 / P2
-type: 功能                   # 必填，枚举：功能 / 边界 / 异常 / 安全 / 组合
-preconditions:               # 可选，前置条件列表；无则写空列表 []
-  - 手机号未注册
-steps:                       # 必填，执行步骤，按顺序
-  - 输入手机号
-  - 获取验证码
-  - 输入验证码
-  - 点击注册
-expected: 创建用户成功        # 必填，预期结果，必须可观察、可判定
-design_method: 等价类        # 必填，枚举：等价类 / 边界值 / 状态转换 / 判定表 / pairwise / 错误推测 / 场景法
-requirement_ref: R1          # 必填，追溯需求条目 ID，可多个（如 "R1,R3"）；ID 须存在于 test-plan.md 的 requirements 清单
+# 已迁移：字段契约请以 templates/testcase.schema.yaml 为准。
+# 人类可读示例见 templates/testcase.example.yaml

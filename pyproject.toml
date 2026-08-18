@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qagent"
+version = "0.3.0"
+description = "AI 测试方案与用例生成工具：结构化契约、校验与导出"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "pyyaml>=6.0",
+    "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+qagent = "qagent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["qagent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

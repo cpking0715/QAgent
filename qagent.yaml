@@ -1,0 +1,17 @@
+# QAgent 项目配置（可选，放在工作区根目录）
+# 未指定项使用 skills/qa-orchestrator/config.defaults.yaml 或内置默认值
+
+input_dir: input
+output_dir: output
+language: zh
+schema: templates/testcase.schema.yaml
+retry_limit: 3
+strict_coverage: true
+
+# 独立 Agent LLM 配置（qagent run 使用）
+llm:
+  model: gpt-4o-mini
+  base_url: https://api.openai.com/v1
+  api_key_env: OPENAI_API_KEY
+  temperature: 0.2
+  max_tokens: 8192

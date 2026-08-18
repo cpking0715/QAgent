@@ -1,0 +1,6 @@
+input_dir: input
+output_dir: output
+language: zh
+schema: templates/testcase.schema.yaml
+retry_limit: 3
+strict_coverage: false
