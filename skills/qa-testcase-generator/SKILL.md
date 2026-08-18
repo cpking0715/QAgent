@@ -1,12 +1,15 @@
 ---
 name: qa-testcase-generator
-description: 依据测试方案（test-plan.md）与风险分析（risk.md）生成结构化测试用例文件 testcases.md，每条用例为符合 templates/testcase.yaml 契约的 YAML 块。当 qa-orchestrator 流水线执行 Step 4，或用户要求生成测试用例时使用。
+description: >-
+  依据覆盖矩阵（coverage-matrix.md）、测试方案（test-plan.md）与风险分析（risk.md）生成结构化测试用例
+  testcases.md，并生成 QA Review（qa-review.md）。每条用例为符合 templates/testcase.schema.yaml 契约的 YAML 块。
+  当 qa-orchestrator 流水线执行 Step 6/7，或用户要求生成测试用例、qa-review / 覆盖矩阵追溯时使用。
 ---
 
-# QA Testcase Generator（用例生成）
+# QA Testcase Generator（用例生成与 QA Review）
 
-输入：`output/test-plan.md`（需求条目清单 R1..Rn 与技术选型）、`output/risk.md`（风险项与优先级映射）。
-输出：`output/testcases.md`。输出语言与需求文档一致。
+输入：`output/coverage-matrix.md`（覆盖契约）、`output/test-plan.md`（需求条目清单 R1..Rn 与技术选型）、`output/risk.md`（风险项与优先级映射）。
+输出：`output/testcases.md`，随后必须写 `output/qa-review.md`。输出语言与需求文档一致。
 
 ## 输出格式（必须遵守）
 
@@ -38,11 +41,11 @@ requirement_ref: R1
 ````
 
 每条用例一个小节，标题为 `## {id} {title}`，正文只有一个 yaml 代码块。
-字段定义与枚举值以 `templates/testcase.yaml` 为准，不得增删字段、不得偏离枚举。
+字段定义与枚举值以 `templates/testcase.schema.yaml` 为准（示例见 `testcase.example.yaml`），不得增删字段、不得偏离枚举。
 
 ## 覆盖规则（生成时逐条自查）
 
-1. **需求覆盖**：每个 R 条目至少 1 条正向用例；`requirement_ref` 必须引用真实存在的 R 编号。
+1. **矩阵覆盖**：coverage-matrix.md 每一行至少 1 条用例；每个 R 条目至少 1 条正向用例；`requirement_ref` 必须引用真实存在的 R 编号。
 2. **风险覆盖**：risk.md 中 CRITICAL 风险必须有 P0 用例（正常+异常路径），HIGH 风险必须有 P0/P1 用例。
 3. **边界覆盖**：所有数值/计数/时效约束必须出边界用例（边界点、略低、略高），`design_method: 边界值`。
 4. **状态覆盖**：存在状态流转时，覆盖全部合法转换 + 至少 1 条非法转换。
@@ -57,9 +60,19 @@ requirement_ref: R1
 - **独立性**：用例之间不互相依赖，前置条件写清。
 - **ID 规则**：`TC-<模块缩写>-<3位序号>`，模块缩写取功能英文缩写大写（如 REG、LOGIN），序号连续不重复。
 
+## QA Review（生成用例后必须执行）
+
+用例写完后，按 `templates/qa-review.md` 生成 `output/qa-review.md`：
+
+1. **追溯表**：SC↔TC 映射，结论仅 `COVERED` / `GAP` / `DUPLICATE` / `WEAK`。
+2. **Coverage Gap**：未覆盖或弱覆盖的场景。
+3. **Test Smell**：重复、含糊预期、不可观察结果等。
+4. 用例校验失败可改用例并**整份重出** Review；**不得回写** coverage-matrix.md。
+
 ## 反模式
 
-- 用例无法追溯到 R 编号或风险项——不可追溯的覆盖是无效覆盖
+- 用例无法追溯到矩阵行、R 编号或风险项——不可追溯的覆盖是无效覆盖
+- 跳过覆盖矩阵或跳过 qa-review.md
 - 把多个验证点塞进一条用例
 - 预期结果使用"应该没问题"、"正常显示"等不可判定描述
 - 组合场景全排列生成上百条用例

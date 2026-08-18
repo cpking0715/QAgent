@@ -1,11 +1,15 @@
 ---
 name: qa-test-design
-description: 从需求文档生成测试方案（test-plan.md）与风险分析（risk.md）。包含需求拆解、等价类/边界值/状态转换/判定表等 ISTQB 测试设计技术选型、5x5 风险矩阵评分。当 qa-orchestrator 流水线执行 Step 2/3，或用户要求做测试分析、测试方案、风险评估时使用。
+description: >-
+  从需求文档生成测试方案（test-plan.md）、风险分析（risk.md）与覆盖矩阵（coverage-matrix.md）。
+  包含需求拆解、等价类/边界值/状态转换/判定表等 ISTQB 测试设计技术选型、5x5 风险矩阵评分、覆盖契约。
+  当 qa-orchestrator 流水线执行 Step 3/4/5，或用户要求做测试分析、测试方案、风险评估、
+  coverage matrix / 覆盖矩阵时使用。
 ---
 
-# QA Test Design（测试方案与风险分析）
+# QA Test Design（测试方案、风险分析与覆盖矩阵）
 
-产出两个文件：`output/test-plan.md`（模板 `templates/test-plan.md`）和 `output/risk.md`（模板 `templates/risk.md`）。输出语言与需求文档一致。
+产出三个文件：`output/test-plan.md`（模板 `templates/test-plan.md`）、`output/risk.md`（模板 `templates/risk.md`）、`output/coverage-matrix.md`（模板 `templates/coverage-matrix.md`）。输出语言与需求文档一致。
 
 ## 第一部分：需求拆解
 
@@ -32,6 +36,8 @@ description: 从需求文档生成测试方案（test-plan.md）与风险分析�
 | 多维度组合（浏览器x系统x网络） | pairwise | 只取代表性组合，禁止全排列导致用例爆炸 |
 | 高风险未知区域 | 错误推测 | 基于经验列典型故障：并发、重放、绕过、注入 |
 
+test-plan.md 第 5 节下**必须**含 `### 5.1 测试层级`（API / UI-E2E / 安全 / 性能等；无代码仓库时 Unit 标「否」）。
+
 ## 第三部分：风险分析（5x5 矩阵）
 
 1. **识别风险**：来源包括——安全绕过（验证码/鉴权被绕过）、资损、数据错误、重复操作、第三方依赖故障、并发竞态、短信/邮件轰炸等滥用场景。
@@ -44,6 +50,15 @@ description: 从需求文档生成测试方案（test-plan.md）与风险分析�
 5. **失效模式分析**：风险分 >= 10 的项按模板第 4 节逐项展开（触发条件/影响范围/检测方式/缓解建议）。
 6. **映射用例优先级**：按模板第 3 节规则，CRITICAL → P0，HIGH → P0/P1，MEDIUM → P1/P2，LOW → P2。
 
+## 第四部分：覆盖矩阵
+
+在风险分析之后、写用例之前，生成 `output/coverage-matrix.md`（模板 `templates/coverage-matrix.md`）。
+
+1. **先矩阵、后用例**：没有覆盖矩阵禁止写 `testcases.md`。
+2. **覆盖契约**：`## 1. 覆盖契约` 表每行一个可测场景（场景ID `SC-xxx`），绑定需求 R、类别（Happy / Boundary / Negative / Security / State / Concurrency）、优先级与可观察判定方式。
+3. **每个 R 至少 1 行**；类别与优先级须与方案/风险一致。
+4. 矩阵是计划覆盖契约，用例阶段不得回写改行；结构校验失败只修矩阵本身。
+
 ## 质量自检
 
 生成后自查，不满足则修正：
@@ -51,14 +66,17 @@ description: 从需求文档生成测试方案（test-plan.md）与风险分析�
 - [ ] 每个需求条目 Rn 都能回答"怎样算验证通过"
 - [ ] requirements 代码块格式为 `RID: 描述`，无多余符号
 - [ ] 测试范围明确写了"不包含"
+- [ ] test-plan 含 `### 5.1 测试层级`
 - [ ] 入口/出口准则具体可判定
 - [ ] 每个风险项有影响度、可能性、风险分、分区四项评分，且乘积计算正确
 - [ ] 风险分 >= 10 的项均有失效模式分析
+- [ ] 覆盖矩阵在用例之前完成，且每个 R 至少 1 行
 - [ ] 需求假设已显式列出
 
 ## 反模式
 
 - 只列正向场景不做边界/异常分析
+- 跳过覆盖矩阵直接写用例
 - 风险评分拍脑袋不给依据——每个分数须能对应评分标准表中的定义
 - 把"第三方服务挂了"写成唯一风险——必须同时覆盖业务逻辑自身风险
 - 模板占位符 `{...}` 残留在产物中

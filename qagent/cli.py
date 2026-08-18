@@ -362,14 +362,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--no-browser", action="store_true")
     p_serve.set_defaults(func=cmd_serve)
 
-    p_generate = sub.add_parser("generate", help="初始化流水线（Step 1-4 由外部 Agent 完成）")
+    p_generate = sub.add_parser("generate", help="初始化流水线（Step 1-7 由外部 Agent 完成）")
     p_generate.add_argument("requirement", type=Path, help="需求文档路径")
     p_generate.add_argument("--out", type=Path, help="输出目录")
     p_generate.set_defaults(func=cmd_generate)
 
     p_pipeline = sub.add_parser("pipeline", help="流水线状态与自动化步骤")
     p_pipeline_sub = p_pipeline.add_subparsers(dest="pipeline_cmd", required=True)
-    for name, help_text in [("status", "查看步骤状态"), ("validate-export", "执行 Step 5-6")]:
+    for name, help_text in [("status", "查看步骤状态"), ("validate-export", "执行 Step 8-9")]:
         sub_parser = p_pipeline_sub.add_parser(name, help=help_text)
         sub_parser.add_argument("--out", type=Path, help="输出目录")
         sub_parser.set_defaults(func=cmd_pipeline, pipeline_cmd=name)
