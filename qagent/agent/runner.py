@@ -195,9 +195,9 @@ class QAgentRunner:
         )
         matrix_content = extract_document(self.llm.complete(sys_prompt, user_prompt))
         self._write(self.config.coverage_matrix_path, matrix_content)
-        req_ids = parse_requirement_ids(self.config.test_plan_path)
         for attempt in range(1, self.config.retry_limit + 1):
             try:
+                req_ids = parse_requirement_ids(self.config.test_plan_path)
                 m_rows = parse_coverage_matrix(self.config.coverage_matrix_path)
                 m_err, m_warn = validate_matrix(m_rows, req_ids, self.config)
             except ValueError as exc:

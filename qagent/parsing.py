@@ -142,8 +142,28 @@ def parse_risks(risk_path: Path) -> list[RiskItem]:
     return risks
 
 
-def _table_after_heading(text: str, heading_prefix: str) -> list[list[str]]:
-    """返回指定标题之后第一张 Markdown 表的数据行（不含表头与分隔行）。"""
+COVERAGE_HEADERS = ("场景ID", "需求", "场景", "类别", "优先级", "判定方式")
+REVIEW_HEADERS = ("场景ID", "对应用例", "结论")
+
+
+def _is_separator_row(cells: list[str]) -> bool:
+    first = cells[0]
+    return first in ("---", "----") or set(first) <= {"-", ":"}
+
+
+def _require_headers(headers: list[str], expected: tuple[str, ...], label: str) -> None:
+    missing = [name for name in expected if name not in headers]
+    if missing:
+        raise ValueError(f"{label} 表头不匹配: 缺少 {missing}，实际 {headers}")
+
+
+def _cell_by_name(headers: list[str], cells: list[str], name: str) -> str:
+    index = headers.index(name)
+    return cells[index] if index < len(cells) else ""
+
+
+def _table_after_heading(text: str, heading_prefix: str) -> tuple[list[str], list[list[str]]]:
+    """返回指定标题之后第一张 Markdown 表的 (表头, 数据行)。"""
     lines = text.splitlines()
     start = None
     for i, line in enumerate(lines):
@@ -153,6 +173,7 @@ def _table_after_heading(text: str, heading_prefix: str) -> list[list[str]]:
     if start is None:
         raise ValueError(f"缺少章节: {heading_prefix}")
 
+    headers: list[str] = []
     rows: list[list[str]] = []
     in_table = False
     for line in lines[start:]:
@@ -166,46 +187,45 @@ def _table_after_heading(text: str, heading_prefix: str) -> list[list[str]]:
         cells = _parse_table_row(stripped)
         if not cells:
             continue
-        first = cells[0]
-        if first in ("场景ID", "---", "----") or set(first) <= {"-", ":"}:
+        if _is_separator_row(cells):
             in_table = True
             continue
-        if not in_table:
+        if not headers:
+            headers = cells
+            in_table = True
             continue
         rows.append(cells)
     if not in_table:
         raise ValueError(f"{heading_prefix} 后没有表格")
-    return rows
+    return headers, rows
 
 
 def parse_coverage_matrix(path: Path) -> list[CoverageRow]:
     text = path.read_text(encoding="utf-8")
-    table = _table_after_heading(text, "## 1. 覆盖契约")
+    headers, table = _table_after_heading(text, "## 1. 覆盖契约")
+    _require_headers(headers, COVERAGE_HEADERS, "覆盖契约")
     rows: list[CoverageRow] = []
     for cells in table:
-        if len(cells) < 6:
-            raise ValueError(f"覆盖契约行列数不足: {cells}")
         rows.append(CoverageRow(
-            scenario_id=cells[0],
-            requirement_id=cells[1],
-            scenario=cells[2],
-            category=cells[3],
-            priority=cells[4],
-            oracle=cells[5],
+            scenario_id=_cell_by_name(headers, cells, "场景ID"),
+            requirement_id=_cell_by_name(headers, cells, "需求"),
+            scenario=_cell_by_name(headers, cells, "场景"),
+            category=_cell_by_name(headers, cells, "类别"),
+            priority=_cell_by_name(headers, cells, "优先级"),
+            oracle=_cell_by_name(headers, cells, "判定方式"),
         ))
     return rows
 
 
 def parse_review_trace(path: Path) -> list[ReviewTraceRow]:
     text = path.read_text(encoding="utf-8")
-    table = _table_after_heading(text, "## 1. 追溯表")
+    headers, table = _table_after_heading(text, "## 1. 追溯表")
+    _require_headers(headers, REVIEW_HEADERS, "追溯表")
     rows: list[ReviewTraceRow] = []
     for cells in table:
-        if len(cells) < 3:
-            raise ValueError(f"追溯表行列数不足: {cells}")
         rows.append(ReviewTraceRow(
-            scenario_id=cells[0],
-            case_id=cells[1],
-            verdict=cells[2].upper(),
+            scenario_id=_cell_by_name(headers, cells, "场景ID"),
+            case_id=_cell_by_name(headers, cells, "对应用例"),
+            verdict=_cell_by_name(headers, cells, "结论").upper(),
         ))
     return rows

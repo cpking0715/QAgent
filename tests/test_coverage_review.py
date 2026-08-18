@@ -14,6 +14,7 @@ from qagent.agent.prompts import (
 from qagent.config import QAgentConfig, resolve_config
 from qagent.pipeline import PipelineStep, check_prerequisites
 from qagent.parsing import (
+    CoverageRow,
     ReviewTraceRow,
     _table_after_heading,
     parse_coverage_matrix,
@@ -50,6 +51,100 @@ def test_parse_review_trace_valid():
     assert [r.scenario_id for r in rows] == ["SC-001", "SC-002", "SC-003"]
     assert rows[0].case_id == "TC-REG-001"
     assert rows[0].verdict == "COVERED"
+
+
+def test_parse_coverage_matrix_rejects_wrong_headers(tmp_path):
+    md = tmp_path / "matrix.md"
+    md.write_text(
+        """\
+## 1. 覆盖契约
+
+| 场景ID | 需求ID | 场景 | 类别 | 优先级 | 判定依据 |
+|--------|--------|------|------|--------|----------|
+| SC-001 | R1 | 正确注册 | Happy | P0 | 注册成功 |
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="表头"):
+        parse_coverage_matrix(md)
+
+
+def test_parse_review_trace_rejects_wrong_headers(tmp_path):
+    md = tmp_path / "review.md"
+    md.write_text(
+        """\
+## 1. 追溯表
+
+| 场景ID | 用例 | 结果 |
+|--------|------|------|
+| SC-001 | TC-REG-001 | COVERED |
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="表头"):
+        parse_review_trace(md)
+
+
+def test_parse_coverage_matrix_reads_cells_by_name(tmp_path):
+    md = tmp_path / "matrix.md"
+    md.write_text(
+        """\
+## 1. 覆盖契约
+
+| 判定方式 | 优先级 | 类别 | 场景 | 需求 | 场景ID |
+|----------|--------|------|------|------|--------|
+| 注册成功并可登录 | P0 | Happy | 未注册手机号正确注册 | R1 | SC-001 |
+""",
+        encoding="utf-8",
+    )
+    rows = parse_coverage_matrix(md)
+    assert rows[0].scenario_id == "SC-001"
+    assert rows[0].requirement_id == "R1"
+    assert rows[0].scenario == "未注册手机号正确注册"
+    assert rows[0].category == "Happy"
+    assert rows[0].priority == "P0"
+    assert rows[0].oracle == "注册成功并可登录"
+
+
+def test_parse_review_trace_reads_cells_by_name(tmp_path):
+    md = tmp_path / "review.md"
+    md.write_text(
+        """\
+## 1. 追溯表
+
+| 结论 | 对应用例 | 场景ID |
+|------|----------|--------|
+| COVERED | TC-REG-001 | SC-001 |
+""",
+        encoding="utf-8",
+    )
+    rows = parse_review_trace(md)
+    assert rows[0].scenario_id == "SC-001"
+    assert rows[0].case_id == "TC-REG-001"
+    assert rows[0].verdict == "COVERED"
+
+
+def test_validate_matrix_empty_scenario():
+    rows = [
+        CoverageRow("SC-001", "R1", "   ", "Happy", "P0", "注册成功"),
+    ]
+    errors, _ = validate_matrix(rows, {"R1"}, _cfg(False))
+    assert any("场景" in e and ("空" in e or "不能为空" in e or "为空" in e) for e in errors)
+
+
+def test_validate_matrix_duplicate_scenario_text():
+    rows = [
+        CoverageRow("SC-001", "R1", "正确注册", "Happy", "P0", "注册成功"),
+        CoverageRow("SC-002", "R1", "  正确注册  ", "Boundary", "P1", "提示失败"),
+    ]
+    errors, _ = validate_matrix(rows, {"R1"}, _cfg(False))
+    assert any("重复" in e for e in errors)
+
+
+def test_validate_review_gap_with_real_case_id_is_error():
+    rows = [ReviewTraceRow("SC-001", "TC-REG-001", "GAP")]
+    errors, _ = validate_review_trace(rows, {"SC-001"}, {"TC-REG-001"}, _cfg(False))
+    assert any("GAP" in e and ("TC-REG-001" in e or "对应用例" in e or "空" in e) for e in errors)
 
 
 def test_table_after_heading_no_table_stops_at_next_heading():

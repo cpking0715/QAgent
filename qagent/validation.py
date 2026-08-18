@@ -11,6 +11,7 @@ from qagent.schema import TestcaseSchema
 
 MATRIX_CATEGORIES = {"Happy", "Boundary", "Negative", "Security", "State", "Concurrency"}
 REVIEW_VERDICTS = {"COVERED", "GAP", "DUPLICATE", "WEAK"}
+GAP_EMPTY_CASE_IDS = {"—", "-", "空"}
 SC_ID_RE = re.compile(r"^SC-\d{3}$")
 
 
@@ -90,6 +91,7 @@ def validate_matrix(
         return ["覆盖矩阵没有任何场景行"], warnings
 
     seen: set[str] = set()
+    seen_scenarios: set[str] = set()
     covered: set[str] = set()
     for row in rows:
         sid = row.scenario_id
@@ -98,6 +100,13 @@ def validate_matrix(
         if sid in seen:
             errors.append(f"{sid}: 场景ID 重复")
         seen.add(sid)
+        scenario_text = row.scenario.strip()
+        if not scenario_text:
+            errors.append(f"{sid}: 场景不能为空")
+        elif scenario_text in seen_scenarios:
+            errors.append(f"{sid}: 场景文本重复: {scenario_text}")
+        else:
+            seen_scenarios.add(scenario_text)
         if row.category not in MATRIX_CATEGORIES:
             errors.append(f"{sid}: 类别 {row.category!r} 不合法")
         if row.priority not in {"P0", "P1", "P2"}:
@@ -136,6 +145,11 @@ def validate_review_trace(
             errors.append(f"{row.scenario_id}: 结论 {row.verdict!r} 不合法")
             continue
         if row.verdict == "GAP":
+            if row.case_id.strip() not in GAP_EMPTY_CASE_IDS:
+                errors.append(
+                    f"{row.scenario_id}: 结论为 GAP 时对应用例必须为空"
+                    f"（— / - / 空），实际 {row.case_id}"
+                )
             msg = f"{row.scenario_id}: 结论为 GAP"
             if strict:
                 errors.append(msg)

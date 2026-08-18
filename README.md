@@ -153,7 +153,9 @@ qagent pipeline validate-export --out output
 qagent pipeline status --out output
 ```
 
-兼容旧脚本（等价于 qagent 子命令）：
+完整校验（含覆盖矩阵与 QA Review）请使用 `qagent check`，不要依赖旧脚本。
+
+兼容入口（委托 `qagent validate` / `qagent export`，不保证单独跑矩阵/Review 检查）：
 
 ```bash
 python scripts/validate_cases.py output/testcases.md --plan output/test-plan.md
