@@ -1,0 +1,99 @@
+# 测试用例 Schema 契约（机器可读，唯一事实来源）
+# qa_common / qagent 包启动时加载此文件，技能文档与 testcase.example.yaml 与之对齐。
+
+version: 1
+
+fields:
+  id:
+    required: true
+    type: string
+    pattern: "^TC-[A-Z0-9]{2,8}-\\d{3}$"
+    description: "唯一 ID，格式 TC-<模块缩写>-<3位序号>"
+
+  title:
+    required: true
+    type: string
+    description: "一句话说清验证点"
+
+  priority:
+    required: true
+    type: string
+    enum: [P0, P1, P2]
+
+  type:
+    required: true
+    type: string
+    enum: [功能, 边界, 异常, 安全, 组合]
+
+  preconditions:
+    required: false
+    type: list
+    description: "前置条件列表；无则写空列表 []"
+
+  steps:
+    required: true
+    type: list
+
+  expected:
+    required: true
+    type: string
+    description: "可观察、可判定的预期结果"
+
+  design_method:
+    required: true
+    type: string
+    enum: [等价类, 边界值, 状态转换, 判定表, pairwise, 错误推测, 场景法]
+
+  requirement_ref:
+    required: true
+    type: string
+    description: "需求条目 ID，可多个（如 R1,R3）"
+
+list_fields: [steps, preconditions]
+
+export_columns:
+  - field: id
+    header: ID
+    width: 14
+  - field: title
+    header: 标题
+    width: 36
+  - field: priority
+    header: 优先级
+    width: 8
+  - field: type
+    header: 类型
+    width: 8
+  - field: preconditions
+    header: 前置条件
+    width: 28
+  - field: steps
+    header: 步骤
+    width: 48
+  - field: expected
+    header: 预期结果
+    width: 36
+  - field: design_method
+    header: 设计方法
+    width: 12
+  - field: requirement_ref
+    header: 需求追溯
+    width: 12
+
+plan_required_sections:
+  - "## 1. 需求来源"
+  - "## 2. 需求条目清单"
+  - "## 3. 测试目标"
+  - "## 4. 测试范围"
+  - "## 5. 测试类型与策略"
+  - "## 6. 测试设计技术选择"
+  - "## 7. 入口/出口准则"
+  - "## 8. 风险概述"
+
+risk_zones:
+  CRITICAL:
+    min_score: 15
+    required_priorities: [P0]
+  HIGH:
+    min_score: 10
+    required_priorities: [P0, P1]

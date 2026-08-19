@@ -218,6 +218,8 @@ def test_config_artifact_paths(tmp_path):
     )
     assert cfg.coverage_matrix_path == tmp_path / "out" / "coverage-matrix.md"
     assert cfg.qa_review_path == tmp_path / "out" / "qa-review.md"
+    assert cfg.test_plan_mindmap_md_path == tmp_path / "out" / "test-plan-mindmap.md"
+    assert cfg.test_plan_mindmap_mm_path == tmp_path / "out" / "test-plan.mm"
 
 
 def test_testcases_requires_matrix(tmp_path):
@@ -246,6 +248,7 @@ def test_prompt_markers_and_signatures():
     assert "### 5.1 测试层级" in user_plan
     _, user_tc = build_testcases_prompt("treq", "plan", "risk", "matrix", cfg)
     assert "矩阵" in user_tc
+    assert "禁止" in user_tc and "- id:" in user_tc
     _, user_fix = build_fix_prompt(
         "cases", ["GAP SC-002"], "plan", cfg,
         test_requirements_text="treq",

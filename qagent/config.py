@@ -73,6 +73,14 @@ class QAgentConfig:
         return self.output_dir / "testcases.xlsx"
 
     @property
+    def test_plan_mindmap_md_path(self) -> Path:
+        return self.output_dir / "test-plan-mindmap.md"
+
+    @property
+    def test_plan_mindmap_mm_path(self) -> Path:
+        return self.output_dir / "test-plan.mm"
+
+    @property
     def pipeline_state_path(self) -> Path:
         return self.output_dir / ".qagent-pipeline.json"
 

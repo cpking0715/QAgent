@@ -1,12 +1,13 @@
 # QAgent：独立 QA 测试 Agent
 
-从需求文档出发，按固定流水线生成 **测试需求 → 测试方案 → 风险分析 → 覆盖矩阵 → 结构化测试用例 → QA Review（md/xlsx）**。
+从需求文档出发，按固定流水线生成 **测试需求 → 测试方案（含思维导图）→ 风险分析 → 覆盖矩阵 → 结构化测试用例 → QA Review（md/xlsx）**。
 
 **两种运行形态：**
 
 | 形态 | 入口 | 场景 |
 |------|------|------|
 | **独立 Agent** | `qagent run` | 命令行、CI、无 IDE，LLM 全自动 |
+| **服务** | `qagent serve` | 内网 Web / API / 飞书，多人任务 + 对话修订 |
 | **Cursor Skill** | `/qa generate` | 对话式、人工可介入 |
 
 详见 [`AGENT.md`](AGENT.md)。
@@ -120,7 +121,7 @@ cp templates/test-requirements.example.md input/test-requirements.md
 Agent 内部流程（防漏测）：
 
 1. **测试需求**（test-requirements.md）：从 PRD + 设计文档穷举可测点、API/边界/异常清单
-2. **测试方案**（test-plan.md）：基于测试需求生成 R 编号需求条目与策略（含 `### 5.1 测试层级`）
+2. **测试方案**（test-plan.md）：基于测试需求生成 R 编号需求条目与策略（含 `### 5.1 测试层级`）；同步导出思维导图 `test-plan-mindmap.md`（飞书可导入）与 `test-plan.mm`（FreeMind / XMind / MindManager）
 3. **风险分析**（risk.md）：5×5 风险矩阵
 4. **覆盖矩阵**（coverage-matrix.md）：计划覆盖契约（先于用例，不可跳过）
 5. **测试用例**（testcases.md）：矩阵每一行至少 1 条用例
@@ -151,7 +152,12 @@ qagent export output/testcases.md --out output/testcases.xlsx --plan output/test
 # Step 8-9 一步完成
 qagent pipeline validate-export --out output
 qagent pipeline status --out output
+
+# 内网服务（上传 / 进度 / 下载 / 对话修订 / 飞书回调）
+qagent serve --host 0.0.0.0 --port 8765 --no-browser
 ```
+
+服务部署见 [`deploy/README.md`](deploy/README.md)。
 
 完整校验（含覆盖矩阵与 QA Review）请使用 `qagent check`，不要依赖旧脚本。
 

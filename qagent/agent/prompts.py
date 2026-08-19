@@ -231,10 +231,18 @@ def build_coverage_matrix_prompt(
     test_plan_text: str,
     risk_text: str,
     config: QAgentConfig,
+    requirement_ids: list[str] | None = None,
 ) -> tuple[str, str]:
     template = _read(config.templates_dir / "coverage-matrix.md")
+    batch_hint = ""
+    if requirement_ids:
+        listed = ", ".join(requirement_ids)
+        batch_hint = (
+            f"\n本批只覆盖这些需求（每个至少 1 行）：{listed}\n"
+            "不要写这些 R 以外的行。场景ID 可从 SC-001 起，脚本会重编号。\n"
+        )
     user = f"""请生成完整的 coverage-matrix.md（覆盖契约，先于用例）。
-
+{batch_hint}
 类别仅允许：Happy / Boundary / Negative / Security / State / Concurrency。
 场景ID 格式 SC-001 起连续。每个 R 至少 1 行。判定方式必须可观察。
 不要编造 Accessibility。不要输出用例 YAML。
@@ -352,8 +360,12 @@ def build_testcases_prompt(
 硬性要求：
 1. 每个 R 至少 1 条用例；测试需求清单项不得遗漏
 2. API/边界/异常清单必须有对应用例
-3. 复杂系统 30~80 条；只输出 testcases.md 正文
-4. 矩阵每一行至少 1 条用例；禁止无矩阵行的用例；expected 必须能对应行内判定方式
+3. 只输出 testcases.md 正文
+4. 矩阵切片每一行恰好 1 条用例，总数必须等于切片行数；禁止多写、禁止切片外用例；expected 必须能对应行内判定方式
+5. **禁止**用 `- id:` YAML 列表；每个用例单独一个已闭合的 ```yaml 块，块内是映射（以 `id:` 开头）
+6. `requirement_ref` 只能填方案中的 R 编号（如 R1），禁止填 SC- / F / A / B / PRE
+7. `title` 必须以场景ID开头，例如 `SC-001 未注册手机号正确注册`
+8. `steps` / `expected` 里不要用反引号；JSON 或含 `{{` `}}` 的文本必须写成双引号字符串
 """
     return SYSTEM, user
 
@@ -389,6 +401,10 @@ def build_fix_prompt(
 
 {_schema_summary(schema)}
 
-只输出修正后的全文，补全遗漏 R 与测试需求要点，不要降低质量。
+硬性要求：
+1. 每个用例单独一个已闭合的 ```yaml 映射块，禁止 `- id:` 列表
+2. `requirement_ref` 只能是 R 编号
+3. 优先补全缺失场景，不要删除已有正确用例
+4. 只输出 testcases.md 正文
 """
     return SYSTEM, user

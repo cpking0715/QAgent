@@ -23,5 +23,8 @@ qagent = "qagent.cli:main"
 where = ["."]
 include = ["qagent*"]
 
+[tool.setuptools.package-data]
+qagent = ["server/static/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

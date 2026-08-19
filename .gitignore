@@ -3,6 +3,7 @@ reference/
 
 # 生成产物
 output/
+data/jobs/
 
 # 上传的原始文档（保留本地，不提交）
 input/uploads/*

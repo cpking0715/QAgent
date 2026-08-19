@@ -235,7 +235,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             return 1
 
     try:
-        result = runner.run(requirement)
+        result = runner.run(requirement, start_from=args.from_step)
     except RuntimeError as exc:
         print(f"ERROR: {exc}")
         return 1
@@ -253,7 +253,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
-    from qagent.serve import serve
+    from qagent.server.app import serve
     serve(host=args.host, port=args.port, open_browser=not args.no_browser)
     return 0
 
@@ -354,9 +354,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--out", type=Path, help="输出目录")
     p_run.add_argument("--api-key", type=str, help="LLM API Key（默认读 qagent.local.yaml）")
     p_run.add_argument("--mock", action="store_true", help="使用 Mock LLM（测试/离线）")
+    p_run.add_argument(
+        "--from",
+        dest="from_step",
+        default="requirements",
+        choices=["requirements", "testcases"],
+        help="testcases=复用已有方案/矩阵，只重跑用例及之后步骤",
+    )
     p_run.set_defaults(func=cmd_run)
 
-    p_serve = sub.add_parser("serve", help="启动 Web 上传界面")
+    p_serve = sub.add_parser("serve", help="启动多人任务服务（Web / API / 飞书回调）")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8765)
     p_serve.add_argument("--no-browser", action="store_true")

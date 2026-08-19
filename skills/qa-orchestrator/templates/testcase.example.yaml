@@ -1,0 +1,16 @@
+# 测试用例示例（人类可读，字段定义以 testcase.schema.yaml 为准）
+
+id: TC-REG-001
+title: 正确手机号注册成功
+priority: P0
+type: 功能
+preconditions:
+  - 手机号未注册
+steps:
+  - 输入手机号
+  - 获取验证码
+  - 输入验证码
+  - 点击注册
+expected: 创建用户成功
+design_method: 等价类
+requirement_ref: R1

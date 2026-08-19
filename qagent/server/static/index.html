@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QAgent</title>
+  <style>
+    :root { color-scheme: light; }
+    body { font-family: -apple-system, sans-serif; margin: 0; background: #f8fafc; color: #0f172a; }
+    header { background: #0f172a; color: #fff; padding: 14px 20px; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { font-size: 1.1rem; margin: 0; }
+    main { display: grid; grid-template-columns: 280px 1fr 340px; gap: 16px; padding: 16px; min-height: calc(100vh - 56px); }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; }
+    button { background: #2563eb; color: #fff; border: 0; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+    button.secondary { background: #475569; }
+    button:disabled { background: #94a3b8; }
+    input, select, textarea { width: 100%; box-sizing: border-box; margin: 6px 0 10px; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; }
+    .job { padding: 8px; border-radius: 8px; cursor: pointer; }
+    .job.active { background: #eff6ff; }
+    .log { font-family: ui-monospace, monospace; font-size: 12px; background: #0f172a; color: #e2e8f0; padding: 10px; height: 180px; overflow: auto; border-radius: 8px; }
+    .preview { white-space: pre-wrap; font-size: 13px; max-height: 360px; overflow: auto; }
+    .chat { display: flex; flex-direction: column; height: calc(100vh - 88px); }
+    .msgs { flex: 1; overflow: auto; }
+    .msg { margin: 8px 0; padding: 8px 10px; border-radius: 8px; }
+    .msg.user { background: #dbeafe; }
+    .msg.assistant { background: #f1f5f9; }
+    a { color: #2563eb; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>QAgent 测试生成服务</h1>
+  <div>Token <input id="token" placeholder="可选 Bearer" style="width:180px;margin:0"></div>
+</header>
+<main>
+  <section class="card">
+    <h3>任务</h3>
+    <input id="user" placeholder="你的名字（可选）">
+    <input id="files" type="file" multiple>
+    <button id="create">上传并创建任务</button>
+    <div id="jobs"></div>
+  </section>
+  <section class="card">
+    <h3 id="title">未选择任务</h3>
+    <p id="status"></p>
+    <div>
+      <button id="runFull">整跑流水线</button>
+      <button id="runCases" class="secondary">只跑矩阵后</button>
+    </div>
+    <p id="arts"></p>
+    <div class="log" id="logs"></div>
+    <h4>预览</h4>
+    <select id="previewName"></select>
+    <div class="preview" id="preview"></div>
+  </section>
+  <section class="card chat">
+    <h3>对话修订</h3>
+    <div class="msgs" id="msgs"></div>
+    <textarea id="chatText" rows="3" placeholder="例如：给 R3 补一条异常用例"></textarea>
+    <button id="send">发送</button>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let current = null, timer = null;
+function headers() {
+  const h = {"X-User": $("user").value || "anonymous"};
+  if ($("token").value) h["Authorization"] = "Bearer " + $("token").value;
+  return h;
+}
+async function api(path, opt={}) {
+  const res = await fetch(path, {headers: {...headers(), ...(opt.headers||{})}, ...opt});
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+async function refreshJobs() {
+  const data = await api("/api/jobs");
+  $("jobs").innerHTML = (data.jobs||[]).map(j =>
+    `<div class="job ${current===j.id?'active':''}" data-id="${j.id}">${j.title||j.id}<br><small>${j.status}</small></div>`
+  ).join("") || "<em>暂无任务</em>";
+  $("jobs").querySelectorAll(".job").forEach(el => el.onclick = () => select(el.dataset.id));
+}
+async function select(id) {
+  current = id;
+  const j = await api("/api/jobs/"+id);
+  $("title").textContent = j.title + " · " + j.id;
+  $("status").textContent = `状态 ${j.status}` + (j.case_count!=null ? ` · ${j.case_count} 条用例` : "") + (j.error? " · "+j.error.join("; ") : "");
+  $("logs").textContent = (j.logs||[]).join("\n");
+  $("arts").innerHTML = Object.entries(j.artifacts||{}).map(([k,f]) =>
+    `<a href="/api/jobs/${id}/artifacts/${f}" target="_blank">${f}</a>`
+  ).join(" · ");
+  $("previewName").innerHTML = Object.values(j.artifacts||{}).filter(f => f.endsWith(".md")).map(f => `<option>${f}</option>`).join("");
+  $("msgs").innerHTML = (j.chat||[]).map(m => `<div class="msg ${m.role}">${m.content}</div>`).join("");
+  if ($("previewName").value) {
+    const text = await fetch("/api/jobs/"+id+"/artifacts/"+$("previewName").value, {headers: headers()}).then(r=>r.text());
+    $("preview").textContent = text.slice(0, 8000);
+  }
+  await refreshJobs();
+  if (j.status === "running" || j.status === "revising") {
+    clearTimeout(timer); timer = setTimeout(() => select(id), 2000);
+  }
+}
+$("create").onclick = async () => {
+  const fd = new FormData();
+  for (const f of $("files").files) fd.append("files", f);
+  const res = await fetch("/api/jobs", {method:"POST", headers: headers(), body: fd});
+  const data = await res.json();
+  if (!res.ok) return alert(data.error||"创建失败");
+  await refreshJobs(); select(data.id);
+};
+async function run(from) {
+  if (!current) return;
+  await api("/api/jobs/"+current+"/run", {method:"POST", headers:{...headers(),"Content-Type":"application/json"}, body: JSON.stringify({from})});
+  select(current);
+}
+$("runFull").onclick = () => run("requirements");
+$("runCases").onclick = () => run("testcases");
+$("previewName").onchange = () => current && select(current);
+$("send").onclick = async () => {
+  if (!current || !$("chatText").value.trim()) return;
+  const text = $("chatText").value; $("chatText").value = "";
+  await api("/api/jobs/"+current+"/chat", {method:"POST", headers:{...headers(),"Content-Type":"application/json"}, body: JSON.stringify({message:text})});
+  select(current);
+};
+$("token").value = localStorage.getItem("qagent_token")||"";
+$("token").onchange = () => localStorage.setItem("qagent_token", $("token").value);
+refreshJobs();
+</script>
+</body>
+</html>
