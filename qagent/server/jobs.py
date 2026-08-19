@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -114,6 +115,30 @@ class JobStore:
             raise FileNotFoundError(f"任务不存在: {job_id}")
         data = json.loads(path.read_text(encoding="utf-8"))
         return JobMeta(**data)
+
+    def delete(self, job_id: str) -> None:
+        meta = self.load(job_id)
+        if meta.status in {"running", "revising"}:
+            raise RuntimeError("任务执行中，无法删除")
+        directory = self.job_dir(job_id)
+        index_path = self.root / "feishu-chats.json"
+        if index_path.is_file():
+            try:
+                mapping = json.loads(index_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                mapping = {}
+            changed = False
+            for chat_id, bound in list(mapping.items()):
+                if bound == job_id:
+                    mapping.pop(chat_id, None)
+                    changed = True
+            if changed:
+                index_path.write_text(
+                    json.dumps(mapping, ensure_ascii=False, indent=2), encoding="utf-8",
+                )
+        shutil.rmtree(directory, ignore_errors=False)
+        with self._locks_guard:
+            self._locks.pop(job_id, None)
 
     def list_jobs(self, owner: str | None = None) -> list[JobMeta]:
         jobs: list[JobMeta] = []

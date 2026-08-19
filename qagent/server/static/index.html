@@ -5,64 +5,280 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>QAgent</title>
   <style>
-    :root { color-scheme: light; }
-    body { font-family: -apple-system, sans-serif; margin: 0; background: #f8fafc; color: #0f172a; }
-    header { background: #0f172a; color: #fff; padding: 14px 20px; display: flex; justify-content: space-between; align-items: center; }
-    header h1 { font-size: 1.1rem; margin: 0; }
-    main { display: grid; grid-template-columns: 280px 1fr 340px; gap: 16px; padding: 16px; min-height: calc(100vh - 56px); }
-    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; }
-    button { background: #2563eb; color: #fff; border: 0; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
-    button.secondary { background: #475569; }
-    button:disabled { background: #94a3b8; }
-    input, select, textarea { width: 100%; box-sizing: border-box; margin: 6px 0 10px; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; }
-    .job { padding: 8px; border-radius: 8px; cursor: pointer; }
-    .job.active { background: #eff6ff; }
-    .log { font-family: ui-monospace, monospace; font-size: 12px; background: #0f172a; color: #e2e8f0; padding: 10px; height: 180px; overflow: auto; border-radius: 8px; }
-    .preview { white-space: pre-wrap; font-size: 13px; max-height: 360px; overflow: auto; }
-    .chat { display: flex; flex-direction: column; height: calc(100vh - 88px); }
-    .msgs { flex: 1; overflow: auto; }
-    .msg { margin: 8px 0; padding: 8px 10px; border-radius: 8px; }
-    .msg.user { background: #dbeafe; }
-    .msg.assistant { background: #f1f5f9; }
-    a { color: #2563eb; }
+    :root {
+      --bg: #f4f5f7;
+      --surface: #fff;
+      --text: #1f2329;
+      --muted: #646a73;
+      --line: #e8eaed;
+      --hover: #f2f3f5;
+      --accent: #3370ff;
+      --accent-soft: #e8f0ff;
+      --user-bg: #dce8ff;
+      --ok: #00b42a;
+      --warn: #ff7d00;
+      --err: #f53f3f;
+      --shadow: 0 8px 28px rgba(31, 35, 41, .08);
+      --radius: 18px;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background: var(--bg);
+      font: 15px/1.55 "PingFang SC", "Noto Sans SC", "HarmonyOS Sans SC", -apple-system, sans-serif;
+    }
+    button, input, textarea, select { font: inherit; }
+    button { cursor: pointer; }
+    a { color: var(--accent); text-decoration: none; }
+    .app { display: flex; height: 100%; }
+    .sidebar {
+      width: 260px; flex-shrink: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--line);
+      display: flex; flex-direction: column;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 18px 16px 8px; }
+    .logo {
+      width: 32px; height: 32px; border-radius: 10px;
+      background: linear-gradient(135deg, #5b8cff, #3370ff 55%, #7c5cff);
+      color: #fff; display: grid; place-items: center;
+      font-weight: 700; font-size: 13px; letter-spacing: -.02em;
+    }
+    .brand strong { font-size: 16px; }
+    .brand span { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
+    .new-chat {
+      margin: 12px 12px 8px;
+      height: 40px; border: 1px solid var(--line); border-radius: 12px;
+      background: var(--surface); color: var(--text); font-weight: 560;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .new-chat:hover { background: var(--hover); }
+    .hist { flex: 1; overflow: auto; padding: 4px 8px 12px; }
+    .hist h4 { margin: 12px 8px 6px; color: var(--muted); font-size: 12px; font-weight: 500; }
+    .job {
+      padding: 8px 8px 8px 12px; border-radius: 12px; cursor: pointer;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .job .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .job:hover { background: var(--hover); }
+    .job.active { background: var(--accent-soft); }
+    .job .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .job small { color: var(--muted); font-size: 12px; }
+    .job .del {
+      flex-shrink: 0; width: 28px; height: 28px; border: 0; border-radius: 8px;
+      background: transparent; color: var(--muted); opacity: 0; font-size: 16px; line-height: 1;
+    }
+    .job:hover .del { opacity: 1; }
+    .job .del:hover { background: #fee; color: var(--err); }
+    .side-foot { padding: 12px; border-top: 1px solid var(--line); }
+    .ghost {
+      width: 100%; height: 36px; border: 0; border-radius: 10px;
+      background: transparent; color: var(--muted); text-align: left; padding: 0 8px;
+    }
+    .ghost:hover { background: var(--hover); color: var(--text); }
+    .stage {
+      flex: 1; min-width: 0; display: flex; flex-direction: column;
+      position: relative;
+    }
+    .thread-bar {
+      height: 56px; display: flex; align-items: center; justify-content: space-between;
+      padding: 0 24px; border-bottom: 1px solid transparent;
+    }
+    .thread-bar .meta { color: var(--muted); font-size: 13px; }
+    .actions { display: flex; gap: 8px; }
+    .chip-btn {
+      height: 32px; padding: 0 12px; border-radius: 999px;
+      border: 1px solid var(--line); background: var(--surface); color: var(--text);
+    }
+    .chip-btn:hover { background: var(--hover); }
+    .chip-btn:disabled { opacity: .45; cursor: not-allowed; }
+    .msgs {
+      flex: 1; overflow: auto; padding: 8px 0 16px;
+    }
+    .welcome {
+      max-width: 720px; margin: 8vh auto 0; text-align: center; padding: 0 24px;
+    }
+    .welcome h1 { font-size: 32px; font-weight: 640; letter-spacing: -.03em; margin: 0 0 10px; }
+    .welcome p { color: var(--muted); margin: 0 0 28px; }
+    .suggest { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+    .suggest button {
+      border: 1px solid var(--line); background: var(--surface);
+      border-radius: 999px; padding: 10px 16px; color: var(--text);
+      box-shadow: 0 1px 2px rgba(31,35,41,.04);
+    }
+    .suggest button:hover { border-color: #c9d4ff; background: var(--accent-soft); }
+    .row { max-width: 760px; margin: 0 auto; padding: 6px 24px; display: flex; gap: 12px; }
+    .row.user { justify-content: flex-end; }
+    .avatar {
+      width: 32px; height: 32px; border-radius: 10px; flex-shrink: 0;
+      background: linear-gradient(135deg, #5b8cff, #7c5cff);
+      color: #fff; display: grid; place-items: center; font-size: 11px; font-weight: 700;
+    }
+    .bubble {
+      max-width: min(640px, calc(100% - 44px));
+      padding: 12px 16px; border-radius: 16px; white-space: pre-wrap; word-break: break-word;
+    }
+    .row.assistant .bubble { background: var(--surface); box-shadow: 0 1px 2px rgba(31,35,41,.04); }
+    .row.user .bubble { background: var(--user-bg); border-bottom-right-radius: 6px; }
+    .files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .file-card, .art-card {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px;
+      background: var(--surface); font-size: 13px;
+    }
+    .file-ico {
+      width: 28px; height: 28px; border-radius: 8px;
+      background: #fff3e8; color: #d25f00;
+      display: grid; place-items: center; font-size: 11px; font-weight: 700;
+    }
+    .status-card {
+      background: var(--surface); border-radius: 16px; padding: 14px 16px;
+      box-shadow: 0 1px 2px rgba(31,35,41,.04); min-width: 280px;
+    }
+    .dots { display: inline-flex; gap: 4px; margin-right: 8px; }
+    .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: blink 1.2s infinite; }
+    .dots i:nth-child(2) { animation-delay: .2s; }
+    .dots i:nth-child(3) { animation-delay: .4s; }
+    @keyframes blink { 0%,80%,100% { opacity: .25 } 40% { opacity: 1 } }
+    .log-line { color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 8px; max-height: 72px; overflow: hidden; }
+    .composer-wrap { padding: 8px 24px 20px; }
+    .composer {
+      max-width: 760px; margin: 0 auto;
+      background: var(--surface); border: 1px solid var(--line);
+      border-radius: 24px; box-shadow: var(--shadow);
+      padding: 10px 12px 10px 14px;
+    }
+    .composer.drag { border-color: var(--accent); background: #f6f9ff; }
+    .pending { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 4px 8px; }
+    .pending .file-card { padding: 6px 8px 6px 10px; }
+    .pending button.x { border: 0; background: transparent; color: var(--muted); padding: 0 4px; }
+    .composer-row { display: flex; align-items: flex-end; gap: 8px; }
+    textarea {
+      flex: 1; border: 0; resize: none; outline: none; background: transparent;
+      min-height: 24px; max-height: 160px; padding: 8px 0; line-height: 1.5;
+    }
+    .icon-btn {
+      width: 36px; height: 36px; border: 0; border-radius: 10px;
+      background: transparent; color: var(--muted); display: grid; place-items: center;
+    }
+    .icon-btn:hover { background: var(--hover); color: var(--text); }
+    .send {
+      width: 36px; height: 36px; border: 0; border-radius: 50%;
+      background: var(--accent); color: #fff; display: grid; place-items: center;
+    }
+    .send:disabled { background: #c9cdd4; }
+    .hint { text-align: center; color: #8f959e; font-size: 12px; margin-top: 8px; }
+    .drawer {
+      width: 420px; flex-shrink: 0; background: var(--surface);
+      border-left: 1px solid var(--line); display: none; flex-direction: column;
+    }
+    .drawer.open { display: flex; }
+    .drawer header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .drawer header select { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+    .preview { flex: 1; overflow: auto; padding: 16px; white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: #2b2f36; }
+    .modal-bg {
+      position: fixed; inset: 0; background: rgba(15,23,42,.28);
+      display: none; align-items: center; justify-content: center; z-index: 20;
+    }
+    .modal-bg.show { display: flex; }
+    .modal {
+      width: 360px; background: var(--surface); border-radius: 16px;
+      padding: 20px; box-shadow: var(--shadow);
+    }
+    .modal h3 { margin: 0 0 12px; }
+    .modal label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 6px; }
+    .modal input { width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+    .modal .row-end { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+    .primary { background: var(--accent); color: #fff; border: 0; border-radius: 10px; height: 36px; padding: 0 14px; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+    .dot.running, .dot.revising { background: var(--accent); }
+    .dot.ready { background: var(--ok); }
+    .dot.failed { background: var(--err); }
+    .dot.uploaded { background: var(--warn); }
+    @media (max-width: 900px) {
+      .sidebar { display: none; }
+      .drawer { position: absolute; inset: 0; width: auto; z-index: 10; }
+    }
   </style>
 </head>
 <body>
-<header>
-  <h1>QAgent 测试生成服务</h1>
-  <div>Token <input id="token" placeholder="可选 Bearer" style="width:180px;margin:0"></div>
-</header>
-<main>
-  <section class="card">
-    <h3>任务</h3>
-    <input id="user" placeholder="你的名字（可选）">
-    <input id="files" type="file" multiple>
-    <button id="create">上传并创建任务</button>
-    <div id="jobs"></div>
-  </section>
-  <section class="card">
-    <h3 id="title">未选择任务</h3>
-    <p id="status"></p>
-    <div>
-      <button id="runFull">整跑流水线</button>
-      <button id="runCases" class="secondary">只跑矩阵后</button>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">QA</div>
+      <div><strong>QAgent</strong><span>测试方案助手</span></div>
     </div>
-    <p id="arts"></p>
-    <div class="log" id="logs"></div>
-    <h4>预览</h4>
-    <select id="previewName"></select>
-    <div class="preview" id="preview"></div>
-  </section>
-  <section class="card chat">
-    <h3>对话修订</h3>
+    <button class="new-chat" id="newChat">＋ 新对话</button>
+    <div class="hist">
+      <h4>历史任务</h4>
+      <div id="jobs"></div>
+    </div>
+    <div class="side-foot">
+      <button class="ghost" id="openSettings">设置</button>
+    </div>
+  </aside>
+  <section class="stage">
+    <div class="thread-bar" id="threadBar" hidden>
+      <div>
+        <div id="title">对话</div>
+        <div class="meta" id="status"></div>
+      </div>
+      <div class="actions">
+        <button class="chip-btn" id="runFull">重新整跑</button>
+        <button class="chip-btn" id="runCases">只跑矩阵后</button>
+        <button class="chip-btn" id="toggleDrawer">产物预览</button>
+      </div>
+    </div>
     <div class="msgs" id="msgs"></div>
-    <textarea id="chatText" rows="3" placeholder="例如：给 R3 补一条异常用例"></textarea>
-    <button id="send">发送</button>
+    <div class="composer-wrap">
+      <div class="composer" id="composer">
+        <div class="pending" id="pending"></div>
+        <div class="composer-row">
+          <button class="icon-btn" id="pick" title="上传文档" type="button">＋</button>
+          <textarea id="chatText" rows="1" placeholder="输入修订意见，或把需求文档拖到这里"></textarea>
+          <button class="send" id="send" type="button" disabled>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="hint">支持 md / txt / pdf / docx · 上传文档后会自动生成测试方案与用例</div>
+    </div>
   </section>
-</main>
+  <aside class="drawer" id="drawer">
+    <header>
+      <select id="previewName"></select>
+      <button class="chip-btn" id="closeDrawer">关闭</button>
+    </header>
+    <div class="preview" id="preview">选择一份 Markdown 产物查看</div>
+  </aside>
+</div>
+<input id="files" type="file" multiple hidden accept=".md,.txt,.markdown,.pdf,.docx,.doc">
+<div class="modal-bg" id="settings">
+  <div class="modal">
+    <h3>设置</h3>
+    <label>显示名</label>
+    <input id="user" placeholder="可选">
+    <label>访问 Token</label>
+    <input id="token" placeholder="若服务配置了 QAGENT_TOKEN">
+    <div class="row-end">
+      <button class="chip-btn" id="closeSettings">完成</button>
+    </div>
+  </div>
+</div>
 <script>
 const $ = id => document.getElementById(id);
-let current = null, timer = null;
+const STATUS = { uploaded: "待生成", running: "生成中", ready: "已完成", revising: "修订中", failed: "失败" };
+let current = null, timer = null, pending = [], queuedChat = "";
+
+function isBusyStatus(s) {
+  return s === "running" || s === "revising";
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+}
 function headers() {
   const h = {"X-User": $("user").value || "anonymous"};
   if ($("token").value) h["Authorization"] = "Bearer " + $("token").value;
@@ -70,62 +286,232 @@ function headers() {
 }
 async function api(path, opt={}) {
   const res = await fetch(path, {headers: {...headers(), ...(opt.headers||{})}, ...opt});
-  const data = await res.json().catch(() => ({}));
+  const ct = res.headers.get("content-type") || "";
+  const data = ct.includes("json") ? await res.json().catch(() => ({})) : {};
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }
+function syncSend() {
+  $("send").disabled = !(pending.length || $("chatText").value.trim());
+}
+function renderPending() {
+  $("pending").innerHTML = pending.map((f, i) =>
+    `<span class="file-card"><span class="file-ico">${esc(f.name.split(".").pop().slice(0,3).toUpperCase())}</span>${esc(f.name)}<button class="x" data-i="${i}" type="button">×</button></span>`
+  ).join("");
+  $("pending").querySelectorAll(".x").forEach(b => b.onclick = () => { pending.splice(+b.dataset.i, 1); renderPending(); syncSend(); });
+}
+function addFiles(list) {
+  for (const f of list) pending.push(f);
+  renderPending(); syncSend();
+}
+function welcomeHTML() {
+  return `<div class="welcome">
+    <h1>你好，我是 QAgent</h1>
+    <p>上传 PRD 或设计文档，我来生成测试需求、方案、覆盖矩阵和用例。</p>
+    <div class="suggest">
+      <button type="button" data-act="upload">上传需求文档</button>
+      <button type="button" data-act="hint" data-text="给关键路径补异常与边界用例">补异常与边界用例</button>
+      <button type="button" data-act="hint" data-text="加强登录与权限相关覆盖">加强登录与权限覆盖</button>
+    </div>
+  </div>`;
+}
+function fileCards(names) {
+  return `<div class="files">${names.map(n => `<span class="file-card"><span class="file-ico">${esc(String(n).split(".").pop().slice(0,3).toUpperCase())}</span>${esc(n)}</span>`).join("")}</div>`;
+}
+function artCards(job) {
+  const entries = Object.entries(job.artifacts || {});
+  if (!entries.length) return "";
+  return `<div class="files">${entries.map(([k, f]) =>
+    `<a class="art-card" href="/api/jobs/${job.id}/artifacts/${encodeURIComponent(f)}" target="_blank"><span class="file-ico">MD</span>${esc(f)}</a>`
+  ).join("")}</div>`;
+}
+function thinkingCard(job) {
+  const live = isBusyStatus(job.status);
+  const failed = job.status === "failed";
+  const logs = (job.logs || []).filter(line => failed || !/\bERROR:/i.test(line));
+  const last = logs.slice(-1)[0] || (live ? "正在阅读文档并规划测试…" : "");
+  const errors = failed ? (job.error || []).filter(Boolean) : [];
+  return `<div class="status-card">
+    ${live ? `<span class="dots"><i></i><i></i><i></i></span>` : ""}
+    <strong>${esc(STATUS[job.status] || job.status)}</strong>
+    ${job.case_count != null ? ` · ${job.case_count} 条用例` : ""}
+    ${errors.length ? `<div style="color:var(--err);margin-top:6px">${esc(errors.join("; "))}</div>` : ""}
+    ${last ? `<div class="log-line">${esc(last)}</div>` : ""}
+    ${job.status === "ready" ? artCards(job) : ""}
+  </div>`;
+}
+function renderThread(job) {
+  $("threadBar").hidden = false;
+  $("title").textContent = job.title || "未命名任务";
+  $("status").innerHTML = `<span class="dot ${esc(job.status)}"></span>${esc(STATUS[job.status] || job.status)}${job.case_count != null ? " · " + job.case_count + " 条用例" : ""}`;
+  const parts = [];
+  const inputs = job.inputs || [];
+  parts.push(`<div class="row user"><div class="bubble">请根据这些文档生成测试方案和用例${fileCards(inputs)}</div></div>`);
+  for (const m of job.chat || []) {
+    const role = m.role === "user" ? "user" : "assistant";
+    const av = role === "assistant" ? `<div class="avatar">QA</div>` : "";
+    parts.push(`<div class="row ${role}">${av}<div class="bubble">${esc(m.content)}</div></div>`);
+  }
+  if (job.status !== "uploaded" || !(job.chat || []).length) {
+    parts.push(`<div class="row assistant"><div class="avatar">QA</div>${thinkingCard(job)}</div>`);
+  }
+  $("msgs").innerHTML = parts.join("");
+  $("msgs").scrollTop = $("msgs").scrollHeight;
+  const mds = Object.values(job.artifacts || {}).filter(f => String(f).endsWith(".md"));
+  $("previewName").innerHTML = mds.map(f => `<option>${esc(f)}</option>`).join("");
+}
+function showWelcome() {
+  clearTimeout(timer);
+  current = null;
+  $("threadBar").hidden = true;
+  $("msgs").innerHTML = welcomeHTML();
+  $("msgs").querySelectorAll("[data-act=upload]").forEach(b => b.onclick = () => $("files").click());
+  $("msgs").querySelectorAll("[data-act=hint]").forEach(b => {
+    b.onclick = () => { $("chatText").value = b.dataset.text; syncSend(); $("chatText").focus(); };
+  });
+  refreshJobs();
+}
 async function refreshJobs() {
   const data = await api("/api/jobs");
-  $("jobs").innerHTML = (data.jobs||[]).map(j =>
-    `<div class="job ${current===j.id?'active':''}" data-id="${j.id}">${j.title||j.id}<br><small>${j.status}</small></div>`
-  ).join("") || "<em>暂无任务</em>";
+  const jobs = data.jobs || [];
+  $("jobs").innerHTML = jobs.length ? jobs.map(j =>
+    `<div class="job ${current===j.id?"active":""}" data-id="${esc(j.id)}">
+      <div class="body">
+        <span class="t">${esc(j.title || j.id)}</span>
+        <small><span class="dot ${esc(j.status)}"></span>${esc(STATUS[j.status] || j.status)}</small>
+      </div>
+      <button class="del" type="button" data-id="${esc(j.id)}" title="删除">×</button>
+    </div>`
+  ).join("") : `<div style="color:var(--muted);padding:8px 12px;font-size:13px">还没有任务</div>`;
   $("jobs").querySelectorAll(".job").forEach(el => el.onclick = () => select(el.dataset.id));
+  $("jobs").querySelectorAll(".del").forEach(el => el.onclick = ev => removeJob(el.dataset.id, ev));
 }
-async function select(id) {
-  current = id;
-  const j = await api("/api/jobs/"+id);
-  $("title").textContent = j.title + " · " + j.id;
-  $("status").textContent = `状态 ${j.status}` + (j.case_count!=null ? ` · ${j.case_count} 条用例` : "") + (j.error? " · "+j.error.join("; ") : "");
-  $("logs").textContent = (j.logs||[]).join("\n");
-  $("arts").innerHTML = Object.entries(j.artifacts||{}).map(([k,f]) =>
-    `<a href="/api/jobs/${id}/artifacts/${f}" target="_blank">${f}</a>`
-  ).join(" · ");
-  $("previewName").innerHTML = Object.values(j.artifacts||{}).filter(f => f.endsWith(".md")).map(f => `<option>${f}</option>`).join("");
-  $("msgs").innerHTML = (j.chat||[]).map(m => `<div class="msg ${m.role}">${m.content}</div>`).join("");
-  if ($("previewName").value) {
-    const text = await fetch("/api/jobs/"+id+"/artifacts/"+$("previewName").value, {headers: headers()}).then(r=>r.text());
-    $("preview").textContent = text.slice(0, 8000);
+async function removeJob(id, ev) {
+  ev.stopPropagation();
+  if (!confirm("删除后不可恢复，确定删除该任务？")) return;
+  try {
+    await api("/api/jobs/"+id, {method:"DELETE"});
+  } catch (e) {
+    alert(e.message || "删除失败");
+    return;
+  }
+  if (current === id) {
+    showWelcome();
+    return;
   }
   await refreshJobs();
-  if (j.status === "running" || j.status === "revising") {
-    clearTimeout(timer); timer = setTimeout(() => select(id), 2000);
+}
+async function select(id) {
+  clearTimeout(timer);
+  current = id;
+  const j = await api("/api/jobs/"+id);
+  if (current !== id) return;
+  renderThread(j);
+  await refreshJobs();
+  if (current !== id) return;
+  if ($("drawer").classList.contains("open") && $("previewName").value) loadPreview();
+  if (queuedChat && j.status === "ready") {
+    const msg = queuedChat; queuedChat = "";
+    await api("/api/jobs/"+id+"/chat", {
+      method:"POST",
+      headers:{...headers(),"Content-Type":"application/json"},
+      body: JSON.stringify({message:msg})
+    });
+    if (current === id) return select(id);
+    return;
+  }
+  if (isBusyStatus(j.status) && current === id) {
+    timer = setTimeout(() => { if (current === id) select(id); }, 1600);
   }
 }
-$("create").onclick = async () => {
+async function loadPreview() {
+  if (!current || !$("previewName").value) return;
+  const res = await fetch("/api/jobs/"+current+"/artifacts/"+$("previewName").value, {headers: headers()});
+  const text = await res.text();
+  $("preview").textContent = text.slice(0, 20000);
+}
+async function createAndRun() {
+  if (!pending.length) return;
   const fd = new FormData();
-  for (const f of $("files").files) fd.append("files", f);
+  for (const f of pending) fd.append("files", f);
+  pending = []; renderPending(); syncSend();
   const res = await fetch("/api/jobs", {method:"POST", headers: headers(), body: fd});
   const data = await res.json();
-  if (!res.ok) return alert(data.error||"创建失败");
-  await refreshJobs(); select(data.id);
-};
-async function run(from) {
-  if (!current) return;
-  await api("/api/jobs/"+current+"/run", {method:"POST", headers:{...headers(),"Content-Type":"application/json"}, body: JSON.stringify({from})});
+  if (!res.ok) { alert(data.error || "创建失败"); return; }
+  await api("/api/jobs/"+data.id+"/run", {
+    method:"POST",
+    headers:{...headers(),"Content-Type":"application/json"},
+    body: JSON.stringify({from:"requirements"})
+  }).catch(() => {});
+  await select(data.id);
+}
+async function send() {
+  const text = $("chatText").value.trim();
+  if (pending.length) {
+    $("chatText").value = "";
+    if (text) queuedChat = text;
+    await createAndRun();
+    return;
+  }
+  if (!text) return;
+  if (!current) {
+    $("chatText").value = "";
+    $("chatText").placeholder = "请先上传需求文档，或点左上角「新对话」后拖入文件";
+    $("files").click();
+    return;
+  }
+  $("chatText").value = "";
+  syncSend();
+  await api("/api/jobs/"+current+"/chat", {
+    method:"POST",
+    headers:{...headers(),"Content-Type":"application/json"},
+    body: JSON.stringify({message:text})
+  });
   select(current);
 }
+async function run(from) {
+  if (!current) return;
+  await api("/api/jobs/"+current+"/run", {
+    method:"POST",
+    headers:{...headers(),"Content-Type":"application/json"},
+    body: JSON.stringify({from})
+  });
+  select(current);
+}
+
+$("newChat").onclick = showWelcome;
+$("pick").onclick = () => $("files").click();
+$("files").onchange = () => { addFiles($("files").files); $("files").value = ""; };
+$("chatText").oninput = () => {
+  $("chatText").style.height = "auto";
+  $("chatText").style.height = Math.min($("chatText").scrollHeight, 160) + "px";
+  syncSend();
+};
+$("chatText").onkeydown = e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!$("send").disabled) send(); }
+};
+$("send").onclick = send;
 $("runFull").onclick = () => run("requirements");
 $("runCases").onclick = () => run("testcases");
-$("previewName").onchange = () => current && select(current);
-$("send").onclick = async () => {
-  if (!current || !$("chatText").value.trim()) return;
-  const text = $("chatText").value; $("chatText").value = "";
-  await api("/api/jobs/"+current+"/chat", {method:"POST", headers:{...headers(),"Content-Type":"application/json"}, body: JSON.stringify({message:text})});
-  select(current);
-};
-$("token").value = localStorage.getItem("qagent_token")||"";
+$("toggleDrawer").onclick = () => { $("drawer").classList.toggle("open"); loadPreview(); };
+$("closeDrawer").onclick = () => $("drawer").classList.remove("open");
+$("previewName").onchange = loadPreview;
+$("openSettings").onclick = () => $("settings").classList.add("show");
+$("closeSettings").onclick = () => $("settings").classList.remove("show");
+$("token").value = localStorage.getItem("qagent_token") || "";
+$("user").value = localStorage.getItem("qagent_user") || "";
 $("token").onchange = () => localStorage.setItem("qagent_token", $("token").value);
-refreshJobs();
+$("user").onchange = () => localStorage.setItem("qagent_user", $("user").value);
+
+const box = $("composer");
+["dragenter","dragover"].forEach(name => box.addEventListener(name, e => { e.preventDefault(); box.classList.add("drag"); }));
+box.addEventListener("dragleave", e => { e.preventDefault(); box.classList.remove("drag"); });
+box.addEventListener("drop", e => {
+  e.preventDefault(); box.classList.remove("drag");
+  addFiles(e.dataTransfer.files);
+});
+
+showWelcome();
 </script>
 </body>
 </html>

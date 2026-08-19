@@ -6,6 +6,7 @@ import json
 import threading
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
@@ -42,6 +43,78 @@ def test_job_store_isolation(tmp_path):
     assert (store.input_dir(b.id) / "prd.md").read_text() == "# B\n"
     assert len(store.list_jobs()) == 2
     assert store.load(a.id).owner == "alice"
+
+
+def test_delete_job_removes_files(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    job = store.create(title="gone")
+    store.save_upload(job.id, "req.md", b"# x\n")
+    store.delete(job.id)
+    with pytest.raises(FileNotFoundError):
+        store.load(job.id)
+    assert not (tmp_path / "jobs" / job.id).exists()
+
+
+def test_delete_running_job_rejected(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    job = store.create()
+    meta = store.load(job.id)
+    meta.status = "running"
+    store.save_meta(meta)
+    with pytest.raises(RuntimeError, match="执行中"):
+        store.delete(job.id)
+    assert store.load(job.id).id == job.id
+
+
+def test_start_run_clears_previous_error_and_logs(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    service = QAgentService(store, llm_factory=lambda: MockLLM({}))
+    job = store.create()
+    store.save_upload(job.id, "req.md", b"# hello\n")
+    meta = store.load(job.id)
+    meta.status = "failed"
+    meta.error = ["读取 PDF 需要安装 pypdf"]
+    meta.logs = ["[19:21:31] ERROR: 读取 PDF 需要安装 pypdf (OCR-PRD.pdf)"]
+    store.save_meta(meta)
+    public = service.start_run(job.id, "requirements")
+    assert public["status"] == "running"
+    assert public["error"] is None
+    assert public["logs"] == []
+
+
+def test_start_run_allows_parallel_jobs(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    service = QAgentService(store, llm_factory=lambda: MockLLM({}), max_pipeline=2)
+    a = store.create(title="A")
+    b = store.create(title="B")
+    store.save_upload(a.id, "a.md", b"# A\n")
+    store.save_upload(b.id, "b.md", b"# B\n")
+    ra = service.start_run(a.id)
+    rb = service.start_run(b.id)
+    assert ra["status"] == "running"
+    assert rb["status"] == "running"
+    assert ra["id"] != rb["id"]
+
+
+def test_http_delete_job(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    service = QAgentService(store, llm_factory=lambda: MockLLM({}))
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(service))
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    port = httpd.server_address[1]
+    try:
+        job = service.create_job("t", [("req.md", b"# hello\n")])
+        req = Request(f"http://127.0.0.1:{port}/api/jobs/{job['id']}", method="DELETE")
+        body = json.loads(urlopen(req, timeout=3).read())
+        assert body["ok"] is True
+        with pytest.raises(HTTPError) as exc:
+            urlopen(f"http://127.0.0.1:{port}/api/jobs/{job['id']}", timeout=3)
+        assert exc.value.code == 404
+        listed = json.loads(urlopen(f"http://127.0.0.1:{port}/api/jobs", timeout=3).read())
+        assert listed["jobs"] == []
+    finally:
+        httpd.shutdown()
 
 
 def test_patch_upsert_delete_and_validate(tmp_path):
@@ -121,6 +194,40 @@ def test_run_chat_json_actions(tmp_path):
     assert result["ok"], result
     cases = (store.output_dir(job.id) / "testcases.md").read_text(encoding="utf-8")
     assert "TC-REG-008" in cases
+
+
+def test_http_multipart_upload_creates_job(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    service = QAgentService(store, llm_factory=lambda: MockLLM({}))
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(service))
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    port = httpd.server_address[1]
+    try:
+        boundary = "----QAgentTestBoundary"
+        payload = (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="files"; filename="req.md"\r\n'
+            "Content-Type: text/markdown\r\n"
+            "\r\n"
+            "# 登录\n用户可登录。\n"
+            f"\r\n--{boundary}--\r\n"
+        ).encode("utf-8")
+        req = Request(
+            f"http://127.0.0.1:{port}/api/jobs",
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "X-User": "alice",
+            },
+        )
+        job = json.loads(urlopen(req, timeout=3).read())
+        assert job["id"]
+        got = json.loads(urlopen(f"http://127.0.0.1:{port}/api/jobs/{job['id']}", timeout=3).read())
+        assert "req.md" in got["inputs"]
+    finally:
+        httpd.shutdown()
 
 
 def test_http_jobs_and_health(tmp_path):

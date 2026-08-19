@@ -42,6 +42,33 @@ def _read_json(handler: BaseHTTPRequestHandler) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _multipart_fields(form: cgi.FieldStorage, *names: str) -> list:
+    """cgi.FieldStorage.getlist() 返回的是文件内容而非字段对象，不能用来取 filename。"""
+    wanted = set(names)
+    items = []
+    for item in form.list or []:
+        if getattr(item, "name", None) in wanted:
+            items.append(item)
+    return items
+
+
+def _uploads_from_form(form: cgi.FieldStorage) -> list[tuple[str, bytes]]:
+    uploads: list[tuple[str, bytes]] = []
+    for item in _multipart_fields(form, "files", "file"):
+        filename = getattr(item, "filename", None) or ""
+        name = Path(str(filename)).name
+        if not name or Path(name).suffix.lower() not in SUPPORTED:
+            continue
+        if getattr(item, "file", None):
+            data = item.file.read()
+        else:
+            value = item.value
+            data = value if isinstance(value, bytes) else str(value).encode("utf-8")
+        if data:
+            uploads.append((name, data))
+    return uploads
+
+
 def create_handler(service: QAgentService):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
@@ -133,6 +160,26 @@ def create_handler(service: QAgentService):
                 return
             self.send_error(404)
 
+        def do_DELETE(self):
+            parsed = urlparse(self.path)
+            path = parsed.path.rstrip("/") or "/"
+            owner = self._auth()
+            if owner is None:
+                return
+            parts = path.split("/")
+            if len(parts) == 4 and parts[1:3] == ["api", "jobs"]:
+                try:
+                    service.delete_job(parts[3])
+                except FileNotFoundError as exc:
+                    _json(self, 404, {"error": str(exc)})
+                    return
+                except RuntimeError as exc:
+                    _json(self, 400, {"error": str(exc)})
+                    return
+                _json(self, 200, {"ok": True, "id": parts[3]})
+                return
+            self.send_error(404)
+
         def _create_job(self, owner: str) -> None:
             content_type = self.headers.get("Content-Type", "")
             uploads: list[tuple[str, bytes]] = []
@@ -140,16 +187,13 @@ def create_handler(service: QAgentService):
                 form = cgi.FieldStorage(
                     fp=self.rfile,
                     headers=self.headers,
-                    environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": content_type},
+                    environ={
+                        "REQUEST_METHOD": "POST",
+                        "CONTENT_TYPE": content_type,
+                        "CONTENT_LENGTH": self.headers.get("Content-Length") or "0",
+                    },
                 )
-                items = form.getlist("files") or form.getlist("file")
-                for item in items:
-                    if not getattr(item, "filename", None):
-                        continue
-                    name = Path(item.filename).name
-                    if Path(name).suffix.lower() not in SUPPORTED:
-                        continue
-                    uploads.append((name, item.file.read()))
+                uploads = _uploads_from_form(form)
             if not uploads:
                 _json(self, 400, {"error": "请上传 md/pdf/docx 文档"})
                 return

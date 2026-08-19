@@ -1,3 +1,2 @@
 [console_scripts]
 qagent = qagent.cli:main
-

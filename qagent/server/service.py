@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
@@ -20,11 +21,17 @@ class QAgentService:
         self,
         store: JobStore,
         llm_factory: Callable[[], LLMClient] | None = None,
-        max_pipeline: int = 1,
+        max_pipeline: int | None = None,
     ) -> None:
         self.store = store
         self._llm_factory = llm_factory or (lambda: OpenAILLM(resolve_config().llm))
-        self._pipeline = ThreadPoolExecutor(max_workers=max_pipeline)
+        workers = max_pipeline
+        if workers is None:
+            try:
+                workers = int(os.environ.get("QAGENT_MAX_PIPELINE", "8"))
+            except ValueError:
+                workers = 8
+        self._pipeline = ThreadPoolExecutor(max_workers=max(1, workers))
 
     def _llm(self) -> LLMClient:
         return self._llm_factory()
@@ -45,15 +52,19 @@ class QAgentService:
     def list_jobs(self, owner: str | None = None) -> list[dict]:
         return [m.to_public() for m in self.store.list_jobs(owner)]
 
+    def delete_job(self, job_id: str) -> None:
+        self.store.delete(job_id)
+
     def start_run(self, job_id: str, from_step: str = "requirements") -> dict:
         meta = self.store.load(job_id)
-        if meta.status == "running":
+        if meta.status in {"running", "revising"}:
             raise RuntimeError("任务正在运行")
         if from_step not in {"requirements", "testcases"}:
             from_step = "requirements"
         meta.status = "running"
         meta.from_step = from_step
         meta.error = None
+        meta.logs = []
         self.store.save_meta(meta)
         self._pipeline.submit(self._run_pipeline, job_id, from_step)
         return self.store.load(job_id).to_public()
