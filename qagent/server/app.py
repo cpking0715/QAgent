@@ -154,7 +154,7 @@ def create_handler(service: QAgentService):
             if len(parts) == 5 and parts[1:3] == ["api", "jobs"] and parts[4] == "chat":
                 try:
                     body = _read_json(self)
-                    _json(self, 200, service.chat(parts[3], str(body.get("message") or "")))
+                    _json(self, 200, service.start_chat(parts[3], str(body.get("message") or "")))
                 except (FileNotFoundError, RuntimeError, ValueError) as exc:
                     _json(self, 400, {"error": str(exc)})
                 return

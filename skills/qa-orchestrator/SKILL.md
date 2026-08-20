@@ -82,7 +82,7 @@ qagent generate <需求文件> --out <输出目录>
 基于 test-requirements.md，按 qa-test-design 技能与 `templates/test-plan.md` 生成 `{output_dir}/test-plan.md`。
 `## 2. 需求条目清单` 下 requirements 块格式必须为 `RID: 描述`；R 与 PRE 条目不得遗漏。
 第 5 节下必须含 `### 5.1 测试层级`。
-同步写出 `{output_dir}/test-plan-mindmap.md`（标题层级，可导入飞书思维导图）与 `{output_dir}/test-plan.mm`（FreeMind，亦可被 XMind / MindManager 打开）。覆盖矩阵生成后会刷新导图节点。`qagent check` 不因缺少导图失败。
+同步写出 `{output_dir}/test-plan-mindmap.md`、`test-plan.mm` 与 `test-plan.opml`（OPML 可直接导入飞书思维导图；`.mm` 可被 XMind / MindManager 打开）。覆盖矩阵生成后会刷新导图节点。`qagent check` 不因缺少导图失败。已有 Markdown 可用 `qagent mindmap 文件.md -o 文件.opml` 转换。
 
 ### Step 4：生成风险分析
 
@@ -131,7 +131,7 @@ qagent pipeline validate-export --out output
 
 ## 完成标准
 
-回复用户时列出：产物路径（test-requirements.md、test-plan.md、test-plan-mindmap.md、test-plan.mm、risk.md、coverage-matrix.md、testcases.md、qa-review.md、testcases.xlsx）、用例总数、P0/P1/P2 统计、需求覆盖、需求假设清单（如有）。
+回复用户时列出：产物路径（test-requirements.md、test-plan.md、test-plan-mindmap.md、test-plan.mm、test-plan.opml、risk.md、coverage-matrix.md、testcases.md、qa-review.md、testcases.xlsx）、用例总数、P0/P1/P2 统计、需求覆盖、需求假设清单（如有）。
 
 ## 反模式（禁止）
 

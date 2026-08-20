@@ -17,7 +17,9 @@ from qagent.parsing import (
     CoverageRow,
     ReviewTraceRow,
     _table_after_heading,
+    finalize_matrix_rows,
     parse_coverage_matrix,
+    parse_coverage_matrix_text,
     parse_review_trace,
 )
 from qagent.validation import validate_matrix, validate_review_trace
@@ -44,6 +46,77 @@ def test_parse_coverage_matrix_valid():
     assert rows[0].category == "Happy"
     assert rows[0].oracle == "注册成功并可登录"
     assert all(r.scenario_id != "SC-999" for r in rows)
+
+
+def test_parse_skips_truncated_matrix_row():
+    text = """# 覆盖矩阵
+
+## 1. 覆盖契约
+
+| 场景ID | 需求 | 场景 | 类别 | 优先级 | 判定方式 |
+|--------|------|------|------|--------|----------|
+| SC-117 | R-A5 | 正常删除模板 | Happy | P0 | 返回200 |
+| SC-118 | R-A5 | 调用删除模板API，传
+"""
+    rows = parse_coverage_matrix_text(text)
+    assert [r.scenario_id for r in rows] == ["SC-117"]
+
+
+def test_finalize_matrix_fills_missing_requirements():
+    rows = [
+        CoverageRow("SC-001", "R-A5", "正常删除", "", "", ""),
+        CoverageRow("SC-002", "R-A5", "调用删除模板API，传", "", "", ""),
+    ]
+    items = [
+        ("R-A5", "删除模板API"),
+        ("R-A6", "图片自动匹配模板API"),
+        ("R-A10", "批量删除任务API"),
+    ]
+    finalized = finalize_matrix_rows(rows, items)
+    errors, _ = validate_matrix(finalized, {rid for rid, _ in items}, _cfg(True))
+    assert errors == []
+    covered = {row.requirement_id for row in finalized}
+    assert covered == {"R-A5", "R-A6", "R-A10"}
+    assert all(row.category in {"Happy", "Boundary", "Negative", "Security", "State", "Concurrency"} for row in finalized)
+
+
+def test_fill_missing_ignores_stray_sc_in_title():
+    from qagent.parsing import (
+        ensure_requirements_have_cases,
+        fill_missing_cases,
+        normalize_case,
+    )
+    from qagent.schema import load_schema
+    from qagent.validation import validate_cases
+
+    rows = [
+        CoverageRow("SC-010", "R4", "发票识别", "Happy", "P0", "识别成功"),
+        CoverageRow("SC-057", "R20", "失败任务详情", "Negative", "P1", "返回失败原因"),
+    ]
+    cases = [{
+        "id": "TC-SC-057",
+        "title": "SC-057 SC-010 API查询识别失败任务详情",
+        "priority": "P1",
+        "type": "异常",
+        "preconditions": [],
+        "steps": ["查询失败任务"],
+        "expected": "返回失败原因",
+        "design_method": "错误推测",
+        "requirement_ref": "R20",
+    }]
+    valid = {"R4", "R20"}
+    sc_to_req = {row.scenario_id: row.requirement_id for row in rows}
+    for case in cases:
+        normalize_case(case, valid, sc_to_req)
+    filled = fill_missing_cases(cases, rows)
+    filled = ensure_requirements_have_cases(filled, rows, valid)
+    for case in filled:
+        normalize_case(case, valid, sc_to_req)
+    schema = load_schema(SCHEMA)
+    errors, _ = validate_cases(filled, valid, schema, _cfg(True))
+    assert errors == []
+    refs = {c["requirement_ref"] for c in filled}
+    assert "R4" in refs and "R20" in refs
 
 
 def test_parse_review_trace_valid():
@@ -220,6 +293,7 @@ def test_config_artifact_paths(tmp_path):
     assert cfg.qa_review_path == tmp_path / "out" / "qa-review.md"
     assert cfg.test_plan_mindmap_md_path == tmp_path / "out" / "test-plan-mindmap.md"
     assert cfg.test_plan_mindmap_mm_path == tmp_path / "out" / "test-plan.mm"
+    assert cfg.test_plan_mindmap_opml_path == tmp_path / "out" / "test-plan.opml"
 
 
 def test_testcases_requires_matrix(tmp_path):

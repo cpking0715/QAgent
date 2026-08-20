@@ -81,6 +81,10 @@ class QAgentConfig:
         return self.output_dir / "test-plan.mm"
 
     @property
+    def test_plan_mindmap_opml_path(self) -> Path:
+        return self.output_dir / "test-plan.opml"
+
+    @property
     def pipeline_state_path(self) -> Path:
         return self.output_dir / ".qagent-pipeline.json"
 

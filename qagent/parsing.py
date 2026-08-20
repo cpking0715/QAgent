@@ -181,6 +181,11 @@ TYPE_ALIASES = {
     "boundary": "边界",
     "security": "安全",
     "接口": "功能",
+    "性能": "功能",
+    "perf": "功能",
+    "performance": "功能",
+    "压力": "功能",
+    "负载": "功能",
 }
 DESIGN_ALIASES = {
     "组合测试": "pairwise",
@@ -241,10 +246,24 @@ def case_scenario_ids(case: dict) -> list[str]:
     return _SC_IN_TEXT.findall(str(blob))
 
 
+def owned_scenario_ids(case: dict) -> list[str]:
+    """一条用例只认主场景，避免标题里顺带出现的 SC-xxx 被当成已覆盖。"""
+    title = str(case.get("title") or "")
+    found = _SC_IN_TEXT.findall(title)
+    if found:
+        return [found[0]]
+    case_id = str(case.get("id") or "")
+    matched = re.fullmatch(r"TC-SC-(\d{3})", case_id)
+    if matched:
+        return [f"SC-{matched.group(1)}"]
+    return []
+
+
 def normalize_case(
     case: dict,
     valid_ids: set[str],
     sc_to_req: dict[str, str] | None = None,
+    req_items: list[tuple[str, str]] | None = None,
 ) -> dict:
     """把 LLM 常见脏字段收成 Schema 可过的形态。"""
     case["steps"] = _as_step_list(case.get("steps")) or ["执行矩阵对应场景"]
@@ -263,12 +282,22 @@ def normalize_case(
     if str(case.get("priority") or "") not in {"P0", "P1", "P2"}:
         case["priority"] = "P1"
     cleaned = sanitize_requirement_ref(case.get("requirement_ref"), valid_ids)
+    if sc_to_req:
+        for sid in owned_scenario_ids(case):
+            rid = sc_to_req.get(sid)
+            if rid in valid_ids:
+                cleaned = rid
+                break
     if not cleaned and sc_to_req:
         for sid in case_scenario_ids(case):
             rid = sc_to_req.get(sid)
             if rid in valid_ids:
                 cleaned = rid
                 break
+    if not cleaned:
+        cleaned = infer_requirement_ref(case, req_items or [], valid_ids)
+    if not cleaned and valid_ids:
+        cleaned = sorted(valid_ids, key=_requirement_sort_key)[0]
     if cleaned:
         case["requirement_ref"] = cleaned
     case_id = str(case.get("id") or "")
@@ -301,8 +330,29 @@ def case_from_matrix_row(row: CoverageRow) -> dict:
 def fill_missing_cases(cases: list[dict], rows: list[CoverageRow]) -> list[dict]:
     have: set[str] = set()
     for case in cases:
-        have.update(case_scenario_ids(case))
+        have.update(owned_scenario_ids(case))
     stubs = [case_from_matrix_row(row) for row in rows if row.scenario_id not in have]
+    return merge_cases(cases, stubs)
+
+
+def ensure_requirements_have_cases(
+    cases: list[dict],
+    rows: list[CoverageRow],
+    valid_ids: set[str] | None = None,
+) -> list[dict]:
+    """方案里每个 R 至少挂一条用例，避免只覆盖了矩阵行但 requirement_ref 对不上。"""
+    allowed = valid_ids if valid_ids is not None else {row.requirement_id for row in rows}
+    covered: set[str] = set()
+    for case in cases:
+        covered.update(rid for rid in ref_ids(case) if rid in allowed)
+    by_req: dict[str, CoverageRow] = {}
+    for row in rows:
+        by_req.setdefault(row.requirement_id, row)
+    stubs = [
+        case_from_matrix_row(row)
+        for rid, row in by_req.items()
+        if rid in allowed and rid not in covered
+    ]
     return merge_cases(cases, stubs)
 
 
@@ -313,7 +363,7 @@ def render_qa_review_md(rows: list[CoverageRow], cases: list[dict]) -> str:
         case_id = str(case.get("id") or "")
         if not case_id:
             continue
-        for sid in case_scenario_ids(case):
+        for sid in owned_scenario_ids(case):
             by_sc.setdefault(sid, case_id)
     table = [
         "| 场景ID | 对应用例 | 结论 |",
@@ -359,6 +409,53 @@ def sanitize_requirement_ref(raw: object, valid_ids: set[str]) -> str:
     return ",".join(kept)
 
 
+_PERF_HINTS = ("性能", "perf", "sla", "吞吐", "时延", "响应时间", "qps", "并发", "耗时", "速度")
+_PERF_REQ_HINTS = ("性能", "sla", "秒", "吞吐", "时延", "速度", "qps")
+
+
+def _requirement_sort_key(rid: str) -> tuple:
+    matched = re.fullmatch(r"R(?:-([A-Z]+))?(\d+)", rid)
+    if not matched:
+        return (2, "", rid)
+    prefix = matched.group(1) or ""
+    return (1 if prefix else 0, prefix, int(matched.group(2)))
+
+
+def infer_requirement_ref(
+    case: dict,
+    req_items: list[tuple[str, str]],
+    valid_ids: set[str],
+) -> str:
+    """标题/ID 对不上矩阵时，按方案条目关键词补 requirement_ref。"""
+    if not req_items:
+        return ""
+    blob = " ".join([
+        str(case.get("id") or ""),
+        str(case.get("title") or ""),
+        str(case.get("expected") or ""),
+        " ".join(str(step) for step in (case.get("steps") or [])),
+    ])
+    blob_l = blob.lower()
+    case_is_perf = any(hint in blob or hint in blob_l for hint in _PERF_HINTS)
+    scored: list[tuple[int, str]] = []
+    for rid, desc in req_items:
+        if rid not in valid_ids:
+            continue
+        score = 0
+        desc_l = desc.lower()
+        if case_is_perf and any(hint in desc or hint in desc_l for hint in _PERF_REQ_HINTS):
+            score += 10
+        for token in ("卡证", "票据", "模板", "导出", "权限", "识别"):
+            if token in blob and token in desc:
+                score += 1
+        if score:
+            scored.append((score, rid))
+    if not scored:
+        return ""
+    scored.sort(key=lambda item: (-item[0], _requirement_sort_key(item[1])))
+    return scored[0][1]
+
+
 def merge_cases(existing: list[dict], incoming: list[dict]) -> list[dict]:
     """按 id 合并，后写覆盖先写。无 id 的追加。"""
     merged: dict[str, dict] = {}
@@ -392,14 +489,114 @@ def parse_requirement_items(plan_path: Path) -> list[tuple[str, str]]:
     return items
 
 
+MATRIX_CATEGORIES = {"Happy", "Boundary", "Negative", "Security", "State", "Concurrency"}
+MATRIX_PRIORITIES = {"P0", "P1", "P2"}
+_CATEGORY_ALIAS = {
+    "": "Happy",
+    "happy": "Happy",
+    "boundary": "Boundary",
+    "negative": "Negative",
+    "security": "Security",
+    "state": "State",
+    "concurrency": "Concurrency",
+    "正向": "Happy",
+    "功能": "Happy",
+    "边界": "Boundary",
+    "异常": "Negative",
+    "负向": "Negative",
+    "安全": "Security",
+    "状态": "State",
+    "并发": "Concurrency",
+}
+
+
+def normalize_category(raw: str) -> str:
+    text = str(raw or "").strip()
+    if text in MATRIX_CATEGORIES:
+        return text
+    return _CATEGORY_ALIAS.get(text.lower(), text or "Happy")
+
+
+def normalize_priority(raw: str) -> str:
+    text = str(raw or "").strip().upper()
+    if text in MATRIX_PRIORITIES:
+        return text
+    if text in {"P00", "高", "紧急"}:
+        return "P0"
+    if text in {"中", "P"}:
+        return "P1"
+    if text in {"低"}:
+        return "P2"
+    return "P1" if not text else text
+
+
+def drop_incomplete_matrix_rows(rows: list[CoverageRow]) -> list[CoverageRow]:
+    """丢掉截断行（场景空，或类别与优先级都空）。"""
+    kept: list[CoverageRow] = []
+    for row in rows:
+        if not str(row.requirement_id).strip() or not str(row.scenario).strip():
+            continue
+        if not str(row.category).strip() and not str(row.priority).strip():
+            continue
+        kept.append(row)
+    return kept
+
+
+def ensure_matrix_covers_requirements(
+    rows: list[CoverageRow],
+    items: list[tuple[str, str]],
+) -> list[CoverageRow]:
+    """每个需求至少补一行 Happy/P1，避免分批截断漏 R。"""
+    covered = {row.requirement_id.strip() for row in rows}
+    filled = list(rows)
+    for rid, desc in items:
+        if rid in covered:
+            continue
+        text = (desc or "").strip() or f"{rid} 主路径"
+        if len(text) > 80:
+            text = text[:80].rstrip() + "…"
+        filled.append(CoverageRow(
+            scenario_id="SC-000",
+            requirement_id=rid,
+            scenario=f"{rid} 主路径：{text}",
+            category="Happy",
+            priority="P1",
+            oracle="结果符合需求描述",
+        ))
+        covered.add(rid)
+    return filled
+
+
+def finalize_matrix_rows(
+    rows: list[CoverageRow],
+    items: list[tuple[str, str]],
+) -> list[CoverageRow]:
+    cleaned: list[CoverageRow] = []
+    for row in drop_incomplete_matrix_rows(rows):
+        cleaned.append(CoverageRow(
+            scenario_id=row.scenario_id,
+            requirement_id=row.requirement_id.strip(),
+            scenario=row.scenario.strip(),
+            category=normalize_category(row.category),
+            priority=normalize_priority(row.priority),
+            oracle=(row.oracle or "结果符合需求描述").strip(),
+        ))
+    return renumber_matrix_rows(ensure_matrix_covers_requirements(cleaned, items))
+
+
+def _md_cell(value: str) -> str:
+    return str(value).replace("|", "／").replace("\n", " ")
+
+
 def render_coverage_table(rows: list[CoverageRow]) -> str:
     header = (
         "| 场景ID | 需求 | 场景 | 类别 | 优先级 | 判定方式 |\n"
         "|--------|------|------|------|--------|----------|"
     )
     body = "\n".join(
-        f"| {row.scenario_id} | {row.requirement_id} | {row.scenario} | "
-        f"{row.category} | {row.priority} | {row.oracle} |"
+        f"| {_md_cell(row.scenario_id)} | {_md_cell(row.requirement_id)} | "
+        f"{_md_cell(row.scenario)} | {_md_cell(row.category)} | "
+        f"{_md_cell(row.priority)} | {_md_cell(row.oracle)} |"
         for row in rows
     )
     return f"## 1. 覆盖契约\n\n{header}\n{body}\n"
@@ -513,6 +710,30 @@ def _cell_by_name(headers: list[str], cells: list[str], name: str) -> str:
     return cells[index] if index < len(cells) else ""
 
 
+def _coverage_row_from_cells(headers: list[str], cells: list[str]) -> CoverageRow | None:
+    if len(cells) > len(headers) and len(headers) >= 6:
+        sid, rid = cells[0], cells[1]
+        oracle, priority, category = cells[-1], cells[-2], cells[-3]
+        scenario = " ".join(part for part in cells[2:-3] if part)
+        mapped = CoverageRow(sid, rid, scenario, category, priority, oracle)
+    elif len(cells) < 6:
+        return None
+    else:
+        mapped = CoverageRow(
+            scenario_id=_cell_by_name(headers, cells, "场景ID"),
+            requirement_id=_cell_by_name(headers, cells, "需求"),
+            scenario=_cell_by_name(headers, cells, "场景"),
+            category=_cell_by_name(headers, cells, "类别"),
+            priority=_cell_by_name(headers, cells, "优先级"),
+            oracle=_cell_by_name(headers, cells, "判定方式"),
+        )
+    if not mapped.requirement_id.strip() or not mapped.scenario.strip():
+        return None
+    if not mapped.category.strip() and not mapped.priority.strip():
+        return None
+    return mapped
+
+
 def _table_after_heading(text: str, heading_prefix: str) -> tuple[list[str], list[list[str]]]:
     """返回指定标题之后第一张 Markdown 表的 (表头, 数据行)。"""
     lines = text.splitlines()
@@ -556,14 +777,9 @@ def parse_coverage_matrix_text(text: str) -> list[CoverageRow]:
     _require_headers(headers, COVERAGE_HEADERS, "覆盖契约")
     rows: list[CoverageRow] = []
     for cells in table:
-        rows.append(CoverageRow(
-            scenario_id=_cell_by_name(headers, cells, "场景ID"),
-            requirement_id=_cell_by_name(headers, cells, "需求"),
-            scenario=_cell_by_name(headers, cells, "场景"),
-            category=_cell_by_name(headers, cells, "类别"),
-            priority=_cell_by_name(headers, cells, "优先级"),
-            oracle=_cell_by_name(headers, cells, "判定方式"),
-        ))
+        row = _coverage_row_from_cells(headers, cells)
+        if row is not None:
+            rows.append(row)
     return rows
 
 

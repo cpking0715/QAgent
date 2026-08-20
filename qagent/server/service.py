@@ -116,25 +116,68 @@ class QAgentService:
             meta.error = result.errors
             self.store.save_meta(meta)
 
-    def chat(self, job_id: str, message: str) -> dict:
-        meta = self.store.load(job_id)
-        if meta.status == "running":
-            raise RuntimeError("流水线运行中，稍后再对话")
+    def start_chat(self, job_id: str, message: str) -> dict:
+        """立刻落盘用户消息并异步回复，避免 Web 端空等 LLM。"""
+        text = (message or "").strip()
+        if not text:
+            raise ValueError("消息不能为空")
         lock = self.store.job_lock(job_id)
         with lock:
             meta = self.store.load(job_id)
+            if meta.status == "running":
+                raise RuntimeError("流水线运行中，稍后再对话")
+            if meta.status == "revising":
+                raise RuntimeError("正在回复上一条消息")
             meta.status = "revising"
             self.store.save_meta(meta)
-            try:
-                result = run_chat(self.store, job_id, message, self._llm())
-            finally:
-                meta = self.store.load(job_id)
-                if meta.status == "revising":
-                    meta.status = "ready" if self.store.refresh_artifacts(job_id) else meta.status
-                    self.store.save_meta(meta)
+            self.store.append_chat(job_id, "user", text)
+            self.store.append_log(job_id, "正在回复…")
+        self._pipeline.submit(self._run_chat, job_id, text)
+        return self.get_job(job_id)
+
+    def chat(self, job_id: str, message: str) -> dict:
+        """同步修订（飞书等需要拿到 reply 再回消息）。"""
+        text = (message or "").strip()
+        if not text:
+            raise ValueError("消息不能为空")
+        lock = self.store.job_lock(job_id)
+        with lock:
+            meta = self.store.load(job_id)
+            if meta.status == "running":
+                raise RuntimeError("流水线运行中，稍后再对话")
+            if meta.status == "revising":
+                raise RuntimeError("正在回复上一条消息")
+            meta.status = "revising"
+            self.store.save_meta(meta)
+            result = self._chat_locked(job_id, text, persist_user=True)
         if result.get("rerun"):
             return {**result, "job": self.start_run(job_id, result["rerun"])}
-        return {**result, "job": self.store.load(job_id).to_public()}
+        return {**result, "job": self.get_job(job_id)}
+
+    def _run_chat(self, job_id: str, message: str) -> None:
+        lock = self.store.job_lock(job_id)
+        with lock:
+            result = self._chat_locked(job_id, message, persist_user=False)
+        if result.get("rerun"):
+            try:
+                self.start_run(job_id, result["rerun"])
+            except RuntimeError:
+                pass
+
+    def _chat_locked(self, job_id: str, message: str, persist_user: bool) -> dict:
+        try:
+            result = run_chat(
+                self.store, job_id, message, self._llm(), persist_user=persist_user,
+            )
+        except Exception as exc:
+            self.store.append_chat(job_id, "assistant", f"回复失败：{exc}")
+            result = {"ok": False, "reply": str(exc), "notes": [], "rerun": None}
+        self.store.refresh_artifacts(job_id)
+        meta = self.store.load(job_id)
+        if meta.status == "revising":
+            meta.status = "ready"
+            self.store.save_meta(meta)
+        return result
 
     def artifact_path(self, job_id: str, name: str) -> Path:
         safe = Path(name).name

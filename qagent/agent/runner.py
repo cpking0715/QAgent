@@ -30,6 +30,7 @@ from qagent.parsing import (
     parse_cases,
     parse_cases_text,
     fill_missing_cases,
+    ensure_requirements_have_cases,
     normalize_case,
     parse_coverage_matrix,
     parse_coverage_matrix_text,
@@ -37,11 +38,11 @@ from qagent.parsing import (
     parse_requirement_items,
     parse_review_trace,
     parse_risks,
+    finalize_matrix_rows,
     render_coverage_matrix_md,
     render_coverage_table,
     render_qa_review_md,
     render_testcases_md,
-    renumber_matrix_rows,
 )
 from qagent.pipeline import PipelineStep, init_pipeline, mark_step
 from qagent.schema import load_schema
@@ -174,6 +175,7 @@ class QAgentRunner:
                 risk_path=(
                     self.config.risk_path if self.config.risk_path.is_file() else None
                 ),
+                opml_path=self.config.test_plan_mindmap_opml_path,
             )
         except (OSError, ValueError) as exc:
             self._log(f"WARNING: 思维导图未生成: {exc}")
@@ -181,13 +183,19 @@ class QAgentRunner:
     def _finalize_cases(
         self, cases: list[dict], matrix_rows: list[CoverageRow],
     ) -> list[dict]:
-        req_ids = parse_requirement_ids(self.config.test_plan_path)
+        req_items = parse_requirement_items(self.config.test_plan_path)
+        req_ids = {rid for rid, _ in req_items} or parse_requirement_ids(self.config.test_plan_path)
         sc_to_req = {row.scenario_id: row.requirement_id for row in matrix_rows}
+        before = len(cases)
         for case in cases:
-            normalize_case(case, req_ids, sc_to_req)
+            normalize_case(case, req_ids, sc_to_req, req_items=req_items)
         cases = fill_missing_cases(cases, matrix_rows)
+        cases = ensure_requirements_have_cases(cases, matrix_rows, req_ids)
         for case in cases:
-            normalize_case(case, req_ids, sc_to_req)
+            normalize_case(case, req_ids, sc_to_req, req_items=req_items)
+        added = len(cases) - before
+        if added > 0:
+            self._log(f"  脚本补齐 {added} 条用例（批次缺失或需求未挂上）")
         return cases
 
     def _write_cases(self, cases: list[dict]) -> str:
@@ -239,7 +247,10 @@ class QAgentRunner:
         merged: list[CoverageRow] = []
         for index in range(1, total + 1):
             merged.extend(by_index.get(index) or [])
-        return render_coverage_matrix_md(renumber_matrix_rows(merged))
+        before = len(merged)
+        finalized = finalize_matrix_rows(merged, items)
+        self._log(f"  矩阵合并 {before} 行 → 校验后 {len(finalized)} 行（含补齐缺失需求）")
+        return render_coverage_matrix_md(finalized)
 
     def _generate_case_batches(
         self,
@@ -267,6 +278,7 @@ class QAgentRunner:
                 self._log(f"  批次 {index} 解析失败: {exc}")
                 incoming = []
             kept = keep_one_case_per_row(incoming, chunk)
+            kept = fill_missing_cases(kept, chunk)
             return index, kept
 
         cases: list[dict] = []
@@ -492,13 +504,20 @@ class QAgentRunner:
                     self._log(f"WARNING: {w}")
                 if not m_err:
                     break
+                self._log(f"  覆盖矩阵校验未通过（第 {attempt}/{self.config.retry_limit} 次）: {m_err[0]}")
                 if attempt >= self.config.retry_limit:
                     result.errors = m_err
                     return result
                 sys_prompt, user_prompt = build_fix_matrix_prompt(
                     matrix_content, m_err, plan_content, self.config,
                 )
-                matrix_content = extract_document(self.llm.complete(sys_prompt, user_prompt))
+                raw_fix = extract_document(self.llm.complete(sys_prompt, user_prompt))
+                try:
+                    fixed_rows = parse_coverage_matrix_text(raw_fix)
+                except ValueError:
+                    fixed_rows = parse_coverage_matrix(self.config.coverage_matrix_path)
+                items = parse_requirement_items(self.config.test_plan_path)
+                matrix_content = render_coverage_matrix_md(finalize_matrix_rows(fixed_rows, items))
                 self._write(self.config.coverage_matrix_path, matrix_content)
             self._log(f"Step 5/{total_steps} 完成，耗时 {time.perf_counter() - t0:.0f}s")
             mark_step(self.config, PipelineStep.COVERAGE_MATRIX)
@@ -534,7 +553,7 @@ class QAgentRunner:
         mark_step(self.config, PipelineStep.QA_REVIEW)
         result.steps_completed.append("qa_review")
 
-        # Step 8: validate + fix loop
+        # Step 8: 先脚本补齐，再必要时让 LLM 修
         for attempt in range(1, self.config.retry_limit + 1):
             self._log(
                 f"Step 8/{total_steps} 校验（第 {attempt}/{self.config.retry_limit} 次）...",
@@ -542,14 +561,23 @@ class QAgentRunner:
             errors, warnings = self._full_validate()
             for w in warnings:
                 self._log(f"WARNING: {w}")
+            if errors:
+                self._log(f"校验失败 {len(errors)} 项，先脚本补齐")
+                cases = self._finalize_cases(cases, matrix_rows)
+                cases_content = self._write_cases(cases)
+                review_content = self._write_review(matrix_rows, cases)
+                errors, warnings = self._full_validate()
+                for w in warnings:
+                    self._log(f"WARNING: {w}")
             if not errors:
                 mark_step(self.config, PipelineStep.VALIDATE)
                 result.steps_completed.append("validate")
                 break
-            self._log(f"校验失败 {len(errors)} 项，请求 LLM 修正 ...")
+            self._log(f"脚本补齐后仍有 {len(errors)} 项：{errors[0]}")
             if attempt >= self.config.retry_limit:
                 result.errors = errors
                 return result
+            self._log("请求 LLM 修正 ...")
             t0 = time.perf_counter()
             cases = self._finalize_cases(
                 self._repair_cases(
@@ -587,6 +615,7 @@ class QAgentRunner:
             "test_plan": self.config.test_plan_path,
             "test_plan_mindmap": self.config.test_plan_mindmap_md_path,
             "test_plan_mm": self.config.test_plan_mindmap_mm_path,
+            "test_plan_opml": self.config.test_plan_mindmap_opml_path,
             "risk": self.config.risk_path,
             "coverage_matrix": self.config.coverage_matrix_path,
             "testcases": self.config.testcases_path,

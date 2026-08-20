@@ -1,7 +1,8 @@
-"""从测试方案等产物生成可导入飞书的思维导图（Markdown + FreeMind .mm）。"""
+"""从测试方案等产物生成可导入飞书的思维导图（Markdown / FreeMind / OPML）。"""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -13,6 +14,9 @@ from qagent.parsing import (
     parse_risks,
 )
 
+_HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
+_LIST = re.compile(r"^(\s*)([-*+]|\d+\.)\s+(.*)$")
+
 
 def write_test_plan_mindmaps(
     plan_path: Path,
@@ -20,8 +24,9 @@ def write_test_plan_mindmaps(
     mm_path: Path,
     matrix_path: Path | None = None,
     risk_path: Path | None = None,
-) -> tuple[Path, Path]:
-    """写出 Markdown 大纲与 FreeMind XML，失败时抛出 ValueError。"""
+    opml_path: Path | None = None,
+) -> tuple[Path, Path, Path]:
+    """写出 Markdown 大纲、FreeMind XML 与 OPML（飞书可直接导入）。"""
     plan_text = plan_path.read_text(encoding="utf-8")
     title = _first_heading(plan_text) or "测试方案"
     reqs = parse_requirement_items(plan_path)
@@ -43,7 +48,9 @@ def write_test_plan_mindmaps(
     md_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.write_text(_render_markdown(tree), encoding="utf-8")
     mm_path.write_text(_render_freemind(tree), encoding="utf-8")
-    return md_path, mm_path
+    opml_file = opml_path or mm_path.with_suffix(".opml")
+    opml_file.write_text(_render_opml(tree), encoding="utf-8")
+    return md_path, mm_path, opml_file
 
 
 def _first_heading(text: str) -> str:
@@ -135,8 +142,8 @@ def _render_markdown(node: dict, level: int = 1) -> str:
     if level == 1:
         header = (
             f"# {node['text']}\n\n"
-            "> 导入飞书：云文档 / 思维导图 → 导入 → 选本 Markdown，"
-            "或导入同目录 `test-plan.mm`（FreeMind，XMind / MindManager 也可打开）。\n\n"
+            "> 导入飞书：优先用同目录 `test-plan.opml`（思维导图 → 导入 → OPML）；"
+            "也可导入本 Markdown，或 `test-plan.mm`（XMind / MindManager）。\n\n"
         )
         body = "".join(_render_markdown(child, level + 1) for child in node["children"])
         return header + body
@@ -176,4 +183,98 @@ def _mm_node(node: dict, indent: int = 1) -> str:
     for child in children:
         parts.append(_mm_node(child, indent + 1))
     parts.append(f"{pad}</node>\n")
+    return "".join(parts)
+
+
+def markdown_to_opml(text: str) -> str:
+    """把标题层级或嵌套列表 Markdown 转成 OPML 2.0。"""
+    return _render_opml(parse_markdown_outline(text))
+
+
+def parse_markdown_outline(text: str) -> dict:
+    """解析 ATX 标题与 `-` / `*` / `1.` 嵌套列表为导图树。"""
+    root = {"text": "导图", "children": []}
+    stack: list[tuple[int, dict]] = [(0, root)]
+    heading_level = 0
+    list_indents: list[int] = []
+    in_fence = False
+
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence or not stripped or stripped.startswith(">"):
+            continue
+
+        heading = _HEADING.match(raw)
+        if heading:
+            level = len(heading.group(1))
+            node = {"text": _clean_md_text(heading.group(2)), "children": []}
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+            if not stack:
+                stack = [(0, root)]
+            stack[-1][1]["children"].append(node)
+            stack.append((level, node))
+            heading_level = level
+            list_indents = []
+            continue
+
+        listed = _LIST.match(raw)
+        if listed:
+            indent = len(listed.group(1).replace("\t", "  "))
+            while list_indents and list_indents[-1] > indent:
+                list_indents.pop()
+            if not list_indents or indent > list_indents[-1]:
+                list_indents.append(indent)
+            level = heading_level + len(list_indents)
+            node = {"text": _clean_md_text(listed.group(3)), "children": []}
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+            if not stack:
+                stack = [(0, root)]
+            stack[-1][1]["children"].append(node)
+            stack.append((level, node))
+
+    children = root["children"]
+    if len(children) == 1:
+        return children[0]
+    return root
+
+
+def _clean_md_text(text: str) -> str:
+    cleaned = text.strip()
+    cleaned = re.sub(r"\s+#+\s*$", "", cleaned)
+    cleaned = re.sub(r"\*\*(.+?)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
+    return cleaned.strip() or "未命名"
+
+
+def _render_opml(node: dict) -> str:
+    title = escape(str(node.get("text") or "导图"))
+    body = _opml_outline(node, indent=2)
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<opml version="2.0">\n'
+        "  <head>\n"
+        f"    <title>{title}</title>\n"
+        "  </head>\n"
+        "  <body>\n"
+        f"{body}"
+        "  </body>\n"
+        "</opml>\n"
+    )
+
+
+def _opml_outline(node: dict, indent: int = 2) -> str:
+    pad = "  " * indent
+    text = escape(str(node["text"]), {'"': "&quot;"})
+    children = node.get("children") or []
+    if not children:
+        return f'{pad}<outline text="{text}"/>\n'
+    parts = [f'{pad}<outline text="{text}">\n']
+    for child in children:
+        parts.append(_opml_outline(child, indent + 1))
+    parts.append(f"{pad}</outline>\n")
     return "".join(parts)

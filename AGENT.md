@@ -8,7 +8,7 @@ role: QA 测试方案与用例生成 Agent
 ## 能力
 
 - 输入：PRD / 需求 Markdown（可含设计文档）
-- 输出：test-requirements.md、test-plan.md、test-plan-mindmap.md、test-plan.mm、risk.md、coverage-matrix.md、testcases.md、qa-review.md、testcases.xlsx
+- 输出：test-requirements.md、test-plan.md、test-plan-mindmap.md、test-plan.mm、test-plan.opml、risk.md、coverage-matrix.md、testcases.md、qa-review.md、testcases.xlsx
 - 方法：LLM 生成 + Schema / 矩阵 / Review 强校验 + 失败自动修正
 
 ## 运行方式

@@ -116,14 +116,22 @@ def upsert_cases(store: JobStore, job_id: str, incoming: list[dict]) -> str:
     existing: list[dict] = []
     if config.testcases_path.is_file():
         existing = parse_cases(config.testcases_path)
-    req_ids = parse_requirement_ids(config.test_plan_path) if config.test_plan_path.is_file() else set()
+    req_items: list[tuple[str, str]] = []
+    if config.test_plan_path.is_file():
+        req_items = parse_requirement_items(config.test_plan_path)
+    req_ids = {rid for rid, _ in req_items} or (
+        parse_requirement_ids(config.test_plan_path) if config.test_plan_path.is_file() else set()
+    )
     sc_to_req = {}
     if config.coverage_matrix_path.is_file():
         sc_to_req = {
             row.scenario_id: row.requirement_id
             for row in parse_coverage_matrix(config.coverage_matrix_path)
         }
-    cleaned = [normalize_case(dict(case), req_ids, sc_to_req) for case in incoming]
+    cleaned = [
+        normalize_case(dict(case), req_ids, sc_to_req, req_items=req_items)
+        for case in incoming
+    ]
     merged = merge_cases(existing, cleaned)
     config.testcases_path.write_text(render_testcases_md(merged), encoding="utf-8")
     return f"用例已合并，当前 {len(merged)} 条"
@@ -144,13 +152,14 @@ def validate_and_export(store: JobStore, job_id: str, fill_gaps: bool = True) ->
     if fill_gaps and config.testcases_path.is_file() and config.coverage_matrix_path.is_file():
         rows = parse_coverage_matrix(config.coverage_matrix_path)
         cases = parse_cases(config.testcases_path)
-        req_ids = parse_requirement_ids(config.test_plan_path)
+        req_items = parse_requirement_items(config.test_plan_path)
+        req_ids = {rid for rid, _ in req_items}
         sc_to_req = {row.scenario_id: row.requirement_id for row in rows}
         for case in cases:
-            normalize_case(case, req_ids, sc_to_req)
+            normalize_case(case, req_ids, sc_to_req, req_items=req_items)
         cases = fill_missing_cases(cases, rows)
         for case in cases:
-            normalize_case(case, req_ids, sc_to_req)
+            normalize_case(case, req_ids, sc_to_req, req_items=req_items)
         config.testcases_path.write_text(render_testcases_md(cases), encoding="utf-8")
     if config.test_plan_path.is_file():
         write_test_plan_mindmaps(
@@ -159,6 +168,7 @@ def validate_and_export(store: JobStore, job_id: str, fill_gaps: bool = True) ->
             mm_path=config.test_plan_mindmap_mm_path,
             matrix_path=config.coverage_matrix_path if config.coverage_matrix_path.is_file() else None,
             risk_path=config.risk_path if config.risk_path.is_file() else None,
+            opml_path=config.test_plan_mindmap_opml_path,
         )
     warnings: list[str] = []
     if config.testcases_path.is_file() and config.coverage_matrix_path.is_file():

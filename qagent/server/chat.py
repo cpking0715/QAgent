@@ -8,6 +8,7 @@ from typing import Any
 
 from qagent.agent.llm import LLMClient
 from qagent.agent.prompts import extract_document
+from qagent.parsing import parse_requirement_items
 from qagent.server.jobs import JobStore
 from qagent.server.tools import (
     delete_cases,
@@ -36,7 +37,10 @@ SYSTEM = """你是 QAgent 修订助手。只能改当前任务已生成的测试
 - 能局部改就不要 rerun。rerun 只在用户明确要求重跑时使用。
 - 改完方案或用例后必须带一条 validate_and_export。
 - 不要一次输出超过 8 条用例。
-- upsert 的字段必须符合 Schema 枚举。
+- upsert 每条必须带 requirement_ref，且只能是当前方案里已有的 R 编号。
+- type 只能是 功能/边界/异常/安全/组合。性能、压力、SLA 类用例 type 用「功能」，design_method 用「场景法」。
+- 用户要补性能/安全等用例时：先对到方案中含 SLA/性能/权限 的 R；没有对应 R 时先 patch_plan 加一条再 upsert。
+- 用户只是询问有没有某类用例时，可以只 read_artifact；一旦要求「补充」，必须 upsert。
 """
 
 
@@ -108,20 +112,40 @@ def apply_actions(
     return notes, last_validate, rerun_from
 
 
+def _job_chat_context(store: JobStore, job_id: str) -> str:
+    out = store.output_dir(job_id)
+    chunks: list[str] = []
+    plan = out / "test-plan.md"
+    if plan.is_file():
+        try:
+            items = parse_requirement_items(plan)
+        except ValueError:
+            items = []
+        if items:
+            lines = [f"{rid}: {desc[:80]}" for rid, desc in items]
+            chunks.append("需求条目（requirement_ref 必须从这里选）：\n" + "\n".join(lines))
+    cases_path = out / "testcases.md"
+    if cases_path.is_file():
+        text = cases_path.read_text(encoding="utf-8")
+        n = text.count("```yaml")
+        chunks.append(f"已有用例约 {n} 条；正文是否含「性能」：{'是' if '性能' in text else '否'}")
+    return "\n".join(chunks) or "尚无产物"
+
+
 def run_chat(
     store: JobStore,
     job_id: str,
     message: str,
     llm: LLMClient,
+    persist_user: bool = True,
 ) -> dict[str, Any]:
     history = store.load_chat(job_id, limit=8)
-    summary = []
-    for name in ("test-plan.md", "testcases.md", "coverage-matrix.md"):
-        path = store.output_dir(job_id) / name
-        if path.is_file():
-            summary.append(f"已有 {name}（{path.stat().st_size} 字节）")
+    if persist_user:
+        store.append_chat(job_id, "user", message)
+    elif history and history[-1].get("role") == "user" and history[-1].get("content") == message:
+        history = history[:-1]
     user = (
-        f"当前产物：{'; '.join(summary) or '尚无产物'}\n"
+        f"{_job_chat_context(store, job_id)}\n"
         f"最近对话：{json.dumps(history, ensure_ascii=False)}\n"
         f"用户：{message}"
     )
@@ -131,7 +155,6 @@ def run_chat(
         notes, validated, rerun_from = apply_actions(store, job_id, parsed["actions"])
     except Exception as exc:
         restore_snapshot(store, job_id)
-        store.append_chat(job_id, "user", message)
         err = f"修订未生效（已回滚）：{exc}"
         store.append_chat(job_id, "assistant", err)
         return {
@@ -143,7 +166,6 @@ def run_chat(
     reply = parsed.get("reply") or "已按你的要求处理。"
     if notes:
         reply = reply + "\n" + "\n".join(f"- {n}" for n in notes if len(n) < 200)
-    store.append_chat(job_id, "user", message)
     store.append_chat(job_id, "assistant", reply)
     return {
         "ok": True,

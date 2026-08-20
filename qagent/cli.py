@@ -252,6 +252,57 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mindmap(args: argparse.Namespace) -> int:
+    """把思维导图 Markdown / 嵌套列表转成 OPML，便于飞书导入。"""
+    from qagent.exporters.mindmap import markdown_to_opml, write_test_plan_mindmaps
+
+    source = args.source
+    if source is None:
+        config = resolve_config(overrides={"output_dir": str(args.out_dir) if args.out_dir else None})
+        if config.test_plan_mindmap_md_path.is_file():
+            source = config.test_plan_mindmap_md_path
+        elif config.test_plan_path.is_file():
+            source = config.test_plan_path
+        else:
+            print("ERROR: 请指定 Markdown 文件，或先生成 test-plan-mindmap.md")
+            return 1
+    source = source.resolve()
+    if not source.is_file():
+        print(f"ERROR: 文件不存在: {source}")
+        return 1
+
+    out = args.out
+    if out is None:
+        out = source.with_suffix(".opml")
+    out = out.resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    text = source.read_text(encoding="utf-8")
+    if args.from_plan or "```requirements" in text:
+        md_path = out.with_name("test-plan-mindmap.md") if out.suffix.lower() == ".opml" else source
+        mm_path = out.with_suffix(".mm")
+        sibling = source.parent
+        matrix = sibling / "coverage-matrix.md"
+        risk = sibling / "risk.md"
+        try:
+            write_test_plan_mindmaps(
+                plan_path=source,
+                md_path=md_path,
+                mm_path=mm_path,
+                matrix_path=matrix if matrix.is_file() else None,
+                risk_path=risk if risk.is_file() else None,
+                opml_path=out,
+            )
+        except (OSError, ValueError) as exc:
+            print(f"ERROR: {exc}")
+            return 1
+    else:
+        out.write_text(markdown_to_opml(text), encoding="utf-8")
+    print(f"OK: 已写出 OPML → {out}")
+    print("飞书：新建思维导图 → 导入 → 选择该 .opml")
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from qagent.server.app import serve
     serve(host=args.host, port=args.port, open_browser=not args.no_browser)
@@ -362,6 +413,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="testcases=复用已有方案/矩阵，只重跑用例及之后步骤",
     )
     p_run.set_defaults(func=cmd_run)
+
+    p_mindmap = sub.add_parser("mindmap", help="将 Markdown 标题/嵌套列表转为 OPML（飞书导入）")
+    p_mindmap.add_argument("source", type=Path, nargs="?", help="test-plan-mindmap.md 或任意嵌套列表 Markdown")
+    p_mindmap.add_argument("-o", "--out", type=Path, help="输出 .opml 路径")
+    p_mindmap.add_argument("--out-dir", type=Path, help="未指定文件时，从该输出目录读取思维导图")
+    p_mindmap.add_argument("--from-plan", action="store_true", help="按 test-plan.md 重新生成导图再导出 OPML")
+    p_mindmap.set_defaults(func=cmd_mindmap)
 
     p_serve = sub.add_parser("serve", help="启动多人任务服务（Web / API / 飞书回调）")
     p_serve.add_argument("--host", default="127.0.0.1")

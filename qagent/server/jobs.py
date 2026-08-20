@@ -19,6 +19,7 @@ ARTIFACT_NAMES = {
     "test-plan.md": "test_plan",
     "test-plan-mindmap.md": "test_plan_mindmap",
     "test-plan.mm": "test_plan_mm",
+    "test-plan.opml": "test_plan_opml",
     "risk.md": "risk",
     "coverage-matrix.md": "coverage_matrix",
     "testcases.md": "testcases",

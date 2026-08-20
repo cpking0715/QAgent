@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
@@ -12,6 +13,7 @@ from urllib.request import Request, urlopen
 import pytest
 
 from qagent.agent.llm import MockLLM
+from qagent.parsing import parse_cases
 from qagent.server.app import create_handler
 from qagent.server.chat import apply_actions, run_chat
 from qagent.server.feishu import handle_feishu_event
@@ -144,6 +146,29 @@ def test_patch_upsert_delete_and_validate(tmp_path):
     assert result["ok"], result.get("errors")
     assert (store.output_dir(job.id) / "testcases.xlsx").is_file()
     assert (store.output_dir(job.id) / "test-plan-mindmap.md").is_file()
+    assert (store.output_dir(job.id) / "test-plan.opml").is_file()
+
+
+def test_upsert_fills_missing_requirement_ref(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    job = store.create()
+    _seed_output(store, job.id)
+    upsert_cases(store, job.id, [{
+        "id": "TC-PERF-001",
+        "title": "简单图片识别性能",
+        "priority": "P1",
+        "type": "性能",
+        "preconditions": [],
+        "steps": ["上传100字图片并计时"],
+        "expected": "4秒内返回结果",
+        "design_method": "场景法",
+    }])
+    cases = parse_cases(store.output_dir(job.id) / "testcases.md")
+    perf = next(case for case in cases if case["id"] == "TC-PERF-001")
+    assert perf["requirement_ref"]
+    assert perf["type"] == "功能"
+    result = validate_and_export(store, job.id, fill_gaps=True)
+    assert result["ok"], result
 
 
 def test_apply_actions_rollback_on_bad_delete(tmp_path):
@@ -194,6 +219,40 @@ def test_run_chat_json_actions(tmp_path):
     assert result["ok"], result
     cases = (store.output_dir(job.id) / "testcases.md").read_text(encoding="utf-8")
     assert "TC-REG-008" in cases
+    chat = store.load_chat(job.id)
+    assert [m["role"] for m in chat] == ["user", "assistant"]
+
+
+def test_start_chat_returns_before_llm_finishes(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    started = threading.Event()
+    release = threading.Event()
+
+    class SlowLLM:
+        def complete(self, system, user):
+            started.set()
+            assert release.wait(timeout=2)
+            return json.dumps({"reply": "已收到", "actions": []})
+
+    service = QAgentService(store, llm_factory=lambda: SlowLLM(), max_pipeline=2)
+    job = store.create()
+    _seed_output(store, job.id)
+    public = service.start_chat(job.id, "补一条边界用例")
+    assert public["status"] == "revising"
+    assert public["chat"][-1]["role"] == "user"
+    assert public["chat"][-1]["content"] == "补一条边界用例"
+    assert started.wait(timeout=2)
+    release.set()
+    got = None
+    for _ in range(80):
+        got = service.get_job(job.id)
+        if got["status"] == "ready":
+            break
+        time.sleep(0.05)
+    assert got is not None
+    assert got["status"] == "ready"
+    assert [m["role"] for m in got["chat"][-2:]] == ["user", "assistant"]
+    assert "已收到" in got["chat"][-1]["content"]
 
 
 def test_http_multipart_upload_creates_job(tmp_path):

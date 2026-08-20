@@ -270,7 +270,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const STATUS = { uploaded: "待生成", running: "生成中", ready: "已完成", revising: "修订中", failed: "失败" };
-let current = null, timer = null, pending = [], queuedChat = "";
+let current = null, timer = null, pending = [], queuedChat = "", jobBusy = false;
 
 function isBusyStatus(s) {
   return s === "running" || s === "revising";
@@ -292,7 +292,7 @@ async function api(path, opt={}) {
   return data;
 }
 function syncSend() {
-  $("send").disabled = !(pending.length || $("chatText").value.trim());
+  $("send").disabled = jobBusy || !(pending.length || $("chatText").value.trim());
 }
 function renderPending() {
   $("pending").innerHTML = pending.map((f, i) =>
@@ -329,7 +329,7 @@ function thinkingCard(job) {
   const live = isBusyStatus(job.status);
   const failed = job.status === "failed";
   const logs = (job.logs || []).filter(line => failed || !/\bERROR:/i.test(line));
-  const last = logs.slice(-1)[0] || (live ? "正在阅读文档并规划测试…" : "");
+  const last = logs.slice(-1)[0] || (live ? (job.status === "revising" ? "正在回复…" : "正在阅读文档并规划测试…") : "");
   const errors = failed ? (job.error || []).filter(Boolean) : [];
   return `<div class="status-card">
     ${live ? `<span class="dots"><i></i><i></i><i></i></span>` : ""}
@@ -340,7 +340,14 @@ function thinkingCard(job) {
     ${job.status === "ready" ? artCards(job) : ""}
   </div>`;
 }
+function pendingReplyHTML() {
+  return `<div class="status-card"><span class="dots"><i></i><i></i><i></i></span><strong>正在回复…</strong></div>`;
+}
 function renderThread(job) {
+  jobBusy = isBusyStatus(job.status);
+  $("runFull").disabled = jobBusy;
+  $("runCases").disabled = jobBusy;
+  syncSend();
   $("threadBar").hidden = false;
   $("title").textContent = job.title || "未命名任务";
   $("status").innerHTML = `<span class="dot ${esc(job.status)}"></span>${esc(STATUS[job.status] || job.status)}${job.case_count != null ? " · " + job.case_count + " 条用例" : ""}`;
@@ -363,6 +370,7 @@ function renderThread(job) {
 function showWelcome() {
   clearTimeout(timer);
   current = null;
+  jobBusy = false;
   $("threadBar").hidden = true;
   $("msgs").innerHTML = welcomeHTML();
   $("msgs").querySelectorAll("[data-act=upload]").forEach(b => b.onclick = () => $("files").click());
@@ -416,12 +424,12 @@ async function select(id) {
       method:"POST",
       headers:{...headers(),"Content-Type":"application/json"},
       body: JSON.stringify({message:msg})
-    });
+    }).catch(e => alert(e.message || "发送失败"));
     if (current === id) return select(id);
     return;
   }
   if (isBusyStatus(j.status) && current === id) {
-    timer = setTimeout(() => { if (current === id) select(id); }, 1600);
+    timer = setTimeout(() => { if (current === id) select(id); }, 600);
   }
 }
 async function loadPreview() {
@@ -460,14 +468,27 @@ async function send() {
     $("files").click();
     return;
   }
+  if (jobBusy) return;
   $("chatText").value = "";
+  $("chatText").style.height = "auto";
+  jobBusy = true;
   syncSend();
-  await api("/api/jobs/"+current+"/chat", {
-    method:"POST",
-    headers:{...headers(),"Content-Type":"application/json"},
-    body: JSON.stringify({message:text})
-  });
-  select(current);
+  const id = current;
+  $("msgs").insertAdjacentHTML("beforeend",
+    `<div class="row user"><div class="bubble">${esc(text)}</div></div>` +
+    `<div class="row assistant"><div class="avatar">QA</div>${pendingReplyHTML()}</div>`);
+  $("msgs").scrollTop = $("msgs").scrollHeight;
+  try {
+    await api("/api/jobs/"+id+"/chat", {
+      method:"POST",
+      headers:{...headers(),"Content-Type":"application/json"},
+      body: JSON.stringify({message:text})
+    });
+  } catch (e) {
+    jobBusy = false;
+    alert(e.message || "发送失败");
+  }
+  if (current === id) select(id);
 }
 async function run(from) {
   if (!current) return;

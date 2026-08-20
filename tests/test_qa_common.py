@@ -153,6 +153,39 @@ def test_normalize_case_coerces_schema_fields():
     assert case["requirement_ref"] == "R2"
 
 
+def test_normalize_case_infers_perf_requirement():
+    case = {
+        "id": "TC-PERF-001",
+        "title": "简单图片识别性能 SLA",
+        "priority": "P1",
+        "type": "性能",
+        "steps": ["上传100字图片并计时"],
+        "expected": "4秒内返回结果",
+        "design_method": "场景法",
+    }
+    items = [
+        ("R1", "上传 JPG 图片并识别"),
+        ("R28", "简单文本图片识别速度 ≤ 4秒"),
+    ]
+    normalize_case(case, {"R1", "R28"}, req_items=items)
+    assert case["requirement_ref"] == "R28"
+    assert case["type"] == "功能"
+
+
+def test_normalize_case_fills_missing_ref_with_first_r():
+    case = {
+        "id": "TC-X-001",
+        "title": "补充说明",
+        "steps": ["打开页面"],
+        "expected": "可见",
+        "type": "功能",
+        "design_method": "场景法",
+        "priority": "P1",
+    }
+    normalize_case(case, {"R3", "R1"})
+    assert case["requirement_ref"] == "R1"
+
+
 def test_fill_missing_and_script_review():
     rows = [
         CoverageRow("SC-001", "R1", "注册", "Happy", "P0", "成功"),
@@ -196,10 +229,41 @@ def test_mindmap_contains_requirements(tmp_path):
     )
     outline = md.read_text(encoding="utf-8")
     freemind = mm.read_text(encoding="utf-8")
+    opml = mm.with_suffix(".opml").read_text(encoding="utf-8")
     assert "R1" in outline
     assert "SC-001" in outline
     assert "<map" in freemind
     assert "RK1" in freemind
+    assert "<opml" in opml
+    assert 'text="R1' in opml or "R1" in opml
+
+
+def test_nested_markdown_list_to_opml():
+    from qagent.exporters.mindmap import markdown_to_opml, parse_markdown_outline
+
+    tree = parse_markdown_outline("- 根节点\n  - 子A\n  - 子B\n    - 孙\n")
+    assert tree["text"] == "根节点"
+    assert [c["text"] for c in tree["children"]] == ["子A", "子B"]
+    assert tree["children"][1]["children"][0]["text"] == "孙"
+    xml = markdown_to_opml("# 方案\n\n> 忽略这行\n\n## 范围\n- 上传\n  - JPG\n")
+    assert "<opml version=\"2.0\">" in xml
+    assert 'text="方案"' in xml
+    assert 'text="范围"' in xml
+    assert 'text="JPG"' in xml
+    escaped = markdown_to_opml("- A & B\n")
+    assert "A &amp; B" in escaped
+
+
+def test_cli_mindmap_converts_nested_list(tmp_path):
+    src = tmp_path / "outline.md"
+    src.write_text("- 根\n  - 子\n", encoding="utf-8")
+    dest = tmp_path / "outline.opml"
+    from qagent.cli import main
+    assert main(["mindmap", str(src), "-o", str(dest)]) == 0
+    text = dest.read_text(encoding="utf-8")
+    assert "<opml" in text
+    assert 'text="根"' in text
+    assert 'text="子"' in text
 
 
 def test_valid_cases_pass(schema, requirement_ids):
