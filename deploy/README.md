@@ -11,7 +11,7 @@ export QAGENT_TOKEN=请换成内网口令
 docker compose up -d --build
 ```
 
-浏览器打开 `http://服务器:8765/`，请求头带 `Authorization: Bearer <QAGENT_TOKEN>`（页面右上角也可填）。
+浏览器打开 `http://服务器:8765/`。接口会校验 `Authorization: Bearer <QAGENT_TOKEN>`；页面遇到未授权时会提示输入口令。
 
 飞书事件订阅地址：`https://你的域名/api/feishu/event`  
 需配置 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_VERIFICATION_TOKEN`。

@@ -135,14 +135,25 @@
     }
     .status-card {
       background: var(--surface); border-radius: 16px; padding: 14px 16px;
-      box-shadow: 0 1px 2px rgba(31,35,41,.04); min-width: 280px;
+      box-shadow: 0 1px 2px rgba(31,35,41,.04); min-width: 280px; width: min(560px, 100%);
+      white-space: normal;
     }
+    .deliverables { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+    .deliv {
+      border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+      background: #fafbfc;
+    }
+    .deliv-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .deliv-head strong { font-size: 14px; }
+    .deliv-head a { font-size: 12px; color: var(--accent); white-space: nowrap; }
+    .deliv .file { color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
+    .deliv p { margin: 0; font-size: 13px; color: #4e5969; line-height: 1.5; }
     .dots { display: inline-flex; gap: 4px; margin-right: 8px; }
     .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: blink 1.2s infinite; }
     .dots i:nth-child(2) { animation-delay: .2s; }
     .dots i:nth-child(3) { animation-delay: .4s; }
     @keyframes blink { 0%,80%,100% { opacity: .25 } 40% { opacity: 1 } }
-    .log-line { color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 8px; max-height: 72px; overflow: hidden; }
+    .log-line { color: var(--muted); font-size: 13px; margin-top: 8px; max-height: 4.5em; overflow: hidden; }
     .composer-wrap { padding: 8px 24px 20px; }
     .composer {
       max-width: 760px; margin: 0 auto;
@@ -169,7 +180,24 @@
       background: var(--accent); color: #fff; display: grid; place-items: center;
     }
     .send:disabled { background: #c9cdd4; }
+    .send.stop { background: #1f2329; border-radius: 10px; }
+    .send .ico-stop { display: none; }
+    .send.stop .ico-go { display: none; }
+    .send.stop .ico-stop { display: block; }
     .hint { text-align: center; color: #8f959e; font-size: 12px; margin-top: 8px; }
+    .more { position: relative; }
+    .more-menu {
+      display: none; position: absolute; right: 0; top: 38px; z-index: 5;
+      min-width: 168px; padding: 6px; border-radius: 12px;
+      background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow);
+    }
+    .more.open .more-menu { display: block; }
+    .more-menu button {
+      display: block; width: 100%; text-align: left; border: 0; background: transparent;
+      padding: 8px 10px; border-radius: 8px; color: var(--text);
+    }
+    .more-menu button:hover { background: var(--hover); }
+    .more-menu button:disabled { opacity: .4; cursor: not-allowed; }
     .drawer {
       width: 420px; flex-shrink: 0; background: var(--surface);
       border-left: 1px solid var(--line); display: none; flex-direction: column;
@@ -184,7 +212,7 @@
     }
     .modal-bg.show { display: flex; }
     .modal {
-      width: 360px; background: var(--surface); border-radius: 16px;
+      width: 400px; background: var(--surface); border-radius: 16px;
       padding: 20px; box-shadow: var(--shadow);
     }
     .modal h3 { margin: 0 0 12px; }
@@ -226,10 +254,14 @@
         <div class="meta" id="status"></div>
       </div>
       <div class="actions">
-        <button class="chip-btn" id="runFull">重新整跑</button>
-        <button class="chip-btn" id="runCases">只跑矩阵后</button>
-        <button class="chip-btn" id="cancelRun" hidden>终止</button>
-        <button class="chip-btn" id="toggleDrawer">产物预览</button>
+        <div class="more" id="moreBox">
+          <button class="chip-btn" id="moreBtn" type="button">···</button>
+          <div class="more-menu">
+            <button type="button" id="runFull">重新整跑</button>
+            <button type="button" id="runCases">只跑矩阵后</button>
+            <button type="button" id="toggleDrawer">产物预览</button>
+          </div>
+        </div>
       </div>
     </div>
     <div class="msgs" id="msgs"></div>
@@ -239,12 +271,13 @@
         <div class="composer-row">
           <button class="icon-btn" id="pick" title="上传文档" type="button">＋</button>
           <textarea id="chatText" rows="1" placeholder="输入修订意见，或把需求文档拖到这里"></textarea>
-          <button class="send" id="send" type="button" disabled>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <button class="send" id="send" type="button" disabled title="发送">
+            <svg class="ico-go" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg class="ico-stop" width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" rx="1.5" fill="currentColor"/></svg>
           </button>
         </div>
       </div>
-      <div class="hint">支持 md / txt / pdf / docx · 上传文档后会自动生成测试方案与用例</div>
+      <div class="hint">支持 md / txt / pdf / docx · 上传后先确认测试范围，生成中点方块可停止</div>
     </div>
   </section>
   <aside class="drawer" id="drawer">
@@ -259,12 +292,15 @@
 <div class="modal-bg" id="settings">
   <div class="modal">
     <h3>设置</h3>
-    <label>显示名</label>
-    <input id="user" placeholder="可选">
-    <label>访问 Token</label>
-    <input id="token" placeholder="若服务配置了 QAGENT_TOKEN">
+    <label>API Key</label>
+    <input id="apiKey" type="password" autocomplete="off" placeholder="未配置">
+    <label>接口地址</label>
+    <input id="baseUrl" placeholder="https://api.openai.com/v1">
+    <label>模型</label>
+    <input id="model" placeholder="gpt-4o-mini">
     <div class="row-end">
-      <button class="chip-btn" id="closeSettings">完成</button>
+      <button class="chip-btn" id="closeSettings">取消</button>
+      <button class="primary" id="saveSettings" type="button">保存</button>
     </div>
   </div>
 </div>
@@ -281,19 +317,36 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
 }
 function headers() {
-  const h = {"X-User": $("user").value || "anonymous"};
-  if ($("token").value) h["Authorization"] = "Bearer " + $("token").value;
+  const h = {};
+  const token = localStorage.getItem("qagent_token") || "";
+  if (token) h["Authorization"] = "Bearer " + token;
   return h;
 }
-async function api(path, opt={}) {
+async function api(path, opt={}, retried) {
   const res = await fetch(path, {headers: {...headers(), ...(opt.headers||{})}, ...opt});
   const ct = res.headers.get("content-type") || "";
   const data = ct.includes("json") ? await res.json().catch(() => ({})) : {};
+  if (res.status === 401 && !retried) {
+    const token = window.prompt("服务开启了访问口令，请输入 Token");
+    if (token && token.trim()) {
+      localStorage.setItem("qagent_token", token.trim());
+      return api(path, opt, true);
+    }
+  }
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }
 function syncSend() {
-  $("send").disabled = jobBusy || !(pending.length || $("chatText").value.trim());
+  const btn = $("send");
+  if (jobBusy) {
+    btn.disabled = false;
+    btn.classList.add("stop");
+    btn.title = "停止生成";
+    return;
+  }
+  btn.classList.remove("stop");
+  btn.title = "发送";
+  btn.disabled = !(pending.length || $("chatText").value.trim());
 }
 function renderPending() {
   $("pending").innerHTML = pending.map((f, i) =>
@@ -308,7 +361,7 @@ function addFiles(list) {
 function welcomeHTML() {
   return `<div class="welcome">
     <h1>你好，我是 QAgent</h1>
-    <p>上传 PRD 或设计文档，我来生成测试需求、方案、覆盖矩阵和用例。</p>
+    <p>把 PRD 或设计文档发给我，先一起确认测试范围，再生成方案和用例。</p>
     <div class="suggest">
       <button type="button" data-act="upload">上传需求文档</button>
       <button type="button" data-act="hint" data-text="给关键路径补异常与边界用例">补异常与边界用例</button>
@@ -319,18 +372,16 @@ function welcomeHTML() {
 function fileCards(names) {
   return `<div class="files">${names.map(n => `<span class="file-card"><span class="file-ico">${esc(String(n).split(".").pop().slice(0,3).toUpperCase())}</span>${esc(n)}</span>`).join("")}</div>`;
 }
-function fileIco(name) {
-  const ext = String(name).split(".").pop().toUpperCase();
-  if (ext === "XLSX") return "XLS";
-  if (ext === "OPML") return "OPML";
-  if (ext === "MM") return "MM";
-  return "MD";
-}
 function artCards(job) {
-  const entries = Object.entries(job.artifacts || {});
-  if (!entries.length) return "";
-  return `<div class="files">${entries.map(([k, f]) =>
-    `<a class="art-card" href="/api/jobs/${job.id}/artifacts/${encodeURIComponent(f)}" target="_blank"><span class="file-ico">${fileIco(f)}</span>${esc(f)}</a>`
+  const rows = job.deliverables || [];
+  if (!rows.length) return "";
+  return `<div class="deliverables">${rows.map(row =>
+    `<div class="deliv">
+      <div class="deliv-head"><strong>${esc(row.step)}. ${esc(row.title)}</strong><a href="/api/jobs/${job.id}/artifacts/${encodeURIComponent(row.file)}" target="_blank">下载</a></div>
+      <div class="file">${esc(row.file)}</div>
+      <p><b>作用</b>　${esc(row.role)}</p>
+      ${row.content ? `<p><b>内容</b>　${esc(row.content)}</p>` : ""}
+    </div>`
   ).join("")}</div>`;
 }
 function thinkingCard(job) {
@@ -358,7 +409,6 @@ function renderThread(job) {
   $("runFull").disabled = jobBusy;
   $("runCases").disabled = jobBusy || !canResume;
   $("runCases").title = canResume ? "复用矩阵，只重生成用例" : (jobBusy ? "正在运行" : "尚未生成覆盖矩阵");
-  $("cancelRun").hidden = !jobBusy;
   syncSend();
   $("threadBar").hidden = false;
   $("title").textContent = job.title || "未命名任务";
@@ -484,6 +534,7 @@ async function send() {
     return;
   }
   if (jobBusy) return;
+  $("moreBox").classList.remove("open");
   $("chatText").value = "";
   $("chatText").style.height = "auto";
   jobBusy = true;
@@ -524,19 +575,29 @@ $("chatText").oninput = () => {
   syncSend();
 };
 $("chatText").onkeydown = e => {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!$("send").disabled) send(); }
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    if (!jobBusy && !$("send").disabled) send();
+  }
 };
-$("send").onclick = send;
+$("send").onclick = () => jobBusy ? cancelCurrent() : send();
+$("moreBtn").onclick = ev => {
+  ev.stopPropagation();
+  $("moreBox").classList.toggle("open");
+};
+document.addEventListener("click", () => $("moreBox").classList.remove("open"));
 $("runFull").onclick = () => {
+  $("moreBox").classList.remove("open");
   if (!current) return;
   if (!confirm("将按需求重新生成，已有方案和用例会被覆盖。确定？")) return;
   run("requirements");
 };
 $("runCases").onclick = () => {
+  $("moreBox").classList.remove("open");
   if ($("runCases").disabled) return;
   run("testcases");
 };
-$("cancelRun").onclick = async () => {
+async function cancelCurrent() {
   if (!current) return;
   try {
     await api("/api/jobs/"+current+"/cancel", {method:"POST"});
@@ -544,16 +605,45 @@ $("cancelRun").onclick = async () => {
     alert(e.message || "终止失败");
   }
   select(current);
+}
+$("toggleDrawer").onclick = () => {
+  $("moreBox").classList.remove("open");
+  $("drawer").classList.toggle("open");
+  loadPreview();
 };
-$("toggleDrawer").onclick = () => { $("drawer").classList.toggle("open"); loadPreview(); };
 $("closeDrawer").onclick = () => $("drawer").classList.remove("open");
 $("previewName").onchange = loadPreview;
-$("openSettings").onclick = () => $("settings").classList.add("show");
+async function loadLlmSettings() {
+  $("apiKey").value = "";
+  try {
+    const s = await api("/api/settings");
+    $("apiKey").placeholder = s.api_key_configured
+      ? "已配置 " + (s.api_key_hint || "") + "，留空则不改"
+      : "未配置，在此填写";
+    $("baseUrl").value = s.base_url || "";
+    $("model").value = s.model || "";
+  } catch (e) {
+    $("apiKey").placeholder = e.message || "无法读取当前配置";
+  }
+}
+$("openSettings").onclick = () => { $("settings").classList.add("show"); loadLlmSettings(); };
 $("closeSettings").onclick = () => $("settings").classList.remove("show");
-$("token").value = localStorage.getItem("qagent_token") || "";
-$("user").value = localStorage.getItem("qagent_user") || "";
-$("token").onchange = () => localStorage.setItem("qagent_token", $("token").value);
-$("user").onchange = () => localStorage.setItem("qagent_user", $("user").value);
+$("saveSettings").onclick = async () => {
+  const body = { model: $("model").value.trim(), base_url: $("baseUrl").value.trim() };
+  if ($("apiKey").value.trim()) body.api_key = $("apiKey").value.trim();
+  try {
+    if (body.api_key || body.model || body.base_url) {
+      await api("/api/settings", {
+        method: "POST",
+        headers: {...headers(), "Content-Type": "application/json"},
+        body: JSON.stringify(body)
+      });
+    }
+    $("settings").classList.remove("show");
+  } catch (e) {
+    alert(e.message || "保存失败");
+  }
+};
 
 const box = $("composer");
 ["dragenter","dragover"].forEach(name => box.addEventListener(name, e => { e.preventDefault(); box.classList.add("drag"); }));

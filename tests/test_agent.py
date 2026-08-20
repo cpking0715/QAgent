@@ -69,13 +69,13 @@ def test_agent_run_mock(tmp_path, mock_responses):
     assert (out / "testcases.xlsx").is_file()
     assert (out / "coverage-matrix.md").is_file()
     assert (out / "qa-review.md").is_file()
-    assert (out / "test-plan-mindmap.md").is_file()
-    assert (out / "test-plan.mm").is_file()
-    assert (out / "test-plan.opml").is_file()
-    assert "R1" in (out / "test-plan-mindmap.md").read_text(encoding="utf-8")
-    assert "test_plan_opml" in result.artifacts
+    assert (out / "test-requirements.drawio").is_file()
+    assert not (out / "test-plan.drawio").exists()
+    assert "F1" in (out / "test-requirements.drawio").read_text(encoding="utf-8")
+    assert "test_requirements_drawio" in result.artifacts
+    assert "test_plan_drawio" not in result.artifacts
     assert "test_requirements" in result.artifacts
     assert "coverage_matrix" in result.artifacts
     assert "qa_review" in result.artifacts
-    assert "test_plan_mindmap" in result.artifacts
+    assert "test_plan_mindmap" not in result.artifacts
     assert len(llm.calls) >= 5

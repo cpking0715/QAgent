@@ -11,6 +11,7 @@ from typing import Callable
 from qagent.agent.llm import LLMClient, OpenAILLM
 from qagent.agent.runner import JobCancelled, QAgentRunner
 from qagent.config import resolve_config
+from qagent.deliverables import list_deliverables
 from qagent.ingest import ingest
 from qagent.server.chat import run_chat
 from qagent.server.jobs import JobStore
@@ -32,6 +33,7 @@ def _public_job(store: JobStore, job_id: str) -> dict:
         p.name for p in sorted(store.input_dir(job_id).iterdir()) if p.is_file()
     ]
     data["can_resume_cases"] = store.can_resume_from_matrix(job_id)
+    data["deliverables"] = list_deliverables(data.get("artifacts") or {})
     return data
 
 

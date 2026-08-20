@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+from qagent.config import public_llm_settings, update_local_llm
 from qagent.ingest import SUPPORTED
 from qagent.server.auth import authorize
 from qagent.server.feishu import handle_feishu_event
@@ -18,6 +19,17 @@ from qagent.server.jobs import JobStore, default_jobs_root
 from qagent.server.service import QAgentService
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+def _index_html() -> bytes:
+    candidates = [
+        Path.cwd() / "qagent" / "server" / "static" / "index.html",
+        STATIC_DIR / "index.html",
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path.read_bytes()
+    raise FileNotFoundError("缺少 qagent/server/static/index.html，请在仓库根目录运行 qagent serve")
 
 
 def _json(handler: BaseHTTPRequestHandler, code: int, payload: dict) -> None:
@@ -85,9 +97,10 @@ def create_handler(service: QAgentService):
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/") or "/"
             if path == "/":
-                page = (STATIC_DIR / "index.html").read_bytes()
+                page = _index_html()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
                 self.send_header("Content-Length", str(len(page)))
                 self.end_headers()
                 self.wfile.write(page)
@@ -97,6 +110,9 @@ def create_handler(service: QAgentService):
                 return
             owner = self._auth()
             if owner is None:
+                return
+            if path == "/api/settings":
+                _json(self, 200, public_llm_settings())
                 return
             if path == "/api/jobs":
                 _json(self, 200, {"jobs": service.list_jobs(None)})
@@ -139,6 +155,21 @@ def create_handler(service: QAgentService):
                 return
             owner = self._auth()
             if owner is None:
+                return
+            if path == "/api/settings":
+                body = _read_json(self)
+                try:
+                    _json(
+                        self,
+                        200,
+                        update_local_llm(
+                            api_key=body.get("api_key"),
+                            model=body.get("model"),
+                            base_url=body.get("base_url"),
+                        ),
+                    )
+                except ValueError as exc:
+                    _json(self, 400, {"error": str(exc)})
                 return
             if path == "/api/jobs":
                 self._create_job(owner)

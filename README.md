@@ -152,9 +152,13 @@ python -m qagent.cli --help
 
 ## 4. 配置 LLM（必做，否则无法真正生成）
 
-Key **不要提交到 Git**。两种配法任选其一。
+Key **不要提交到 Git**。三种配法任选其一。
 
-### 方式 1：本地文件（推荐）
+### 方式 1：Web 设置（推荐）
+
+`qagent serve` 打开页面 → 左下角 **设置** → 填写 API Key（以及接口地址、模型）→ 保存。会写入本机 `qagent.local.yaml`，不进 Git。
+
+### 方式 2：本地文件
 
 Windows PowerShell：
 
@@ -181,7 +185,7 @@ llm:
 
 `qagent.local.yaml` 已在 `.gitignore` 中。
 
-### 方式 2：环境变量
+### 方式 3：环境变量
 
 Windows PowerShell（仅当前窗口）：
 
@@ -263,7 +267,7 @@ export QAGENT_TOKEN=请换成内网口令
 qagent serve --host 0.0.0.0 --port 8765 --no-browser
 ```
 
-打开页面后点左下角 **设置**，填同一 Token。
+若开了口令，浏览器第一次访问接口时会提示输入，保存在本机。
 
 任务数据默认写在当前目录 `data/jobs/`（可用环境变量 `QAGENT_JOBS_DIR` 改）。
 
@@ -313,19 +317,17 @@ qagent run input/requirement-example.md --out output --from testcases
 
 | 文件 | 含义 |
 |------|------|
-| `test-requirements.md` | 测试需求 |
+| `test-requirements.md` / `test-requirements.drawio` | 测试需求（Draw.io 用 diagrams.net 打开） |
 | `test-plan.md` | 测试方案 |
-| `test-plan-mindmap.md` / `test-plan.mm` / `test-plan.opml` | 思维导图（**OPML 可直接导入飞书**） |
 | `risk.md` | 风险分析 |
 | `coverage-matrix.md` | 覆盖矩阵 |
 | `testcases.md` / `testcases.xlsx` | 用例 |
 | `qa-review.md` | QA Review |
 
-把已有导图 Markdown 或嵌套列表转成 OPML（飞书：新建思维导图 → 导入）：
+已有 `test-requirements.md` 补出 Draw.io：
 
 ```bash
-qagent mindmap output/test-plan-mindmap.md -o output/test-plan.opml
-qagent mindmap 大纲.md -o 大纲.opml
+qagent mindmap output/test-requirements.md -o output/test-requirements.drawio
 ```
 
 ### 方式 C：Cursor Skill（对话式）
@@ -452,7 +454,7 @@ qagent serve --host 0.0.0.0 --port 8765 --no-browser
 | `python` / `python3` 找不到 | 按第 2 节装 Python；Windows 重装时勾选 Add to PATH |
 | PowerShell 无法运行 `Activate.ps1` | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | `qagent: command not found` | 先激活 `.venv`；或 `python -m pip install -e .`；或 `python -m qagent.cli --help` |
-| 未配置 LLM API Key | 复制并填写 `qagent.local.yaml`，或设置 `OPENAI_API_KEY` |
+| 未配置 LLM API Key | 页面左下角「设置」填写；或写 `qagent.local.yaml`；或设 `OPENAI_API_KEY` |
 | 读取 PDF 需要 pypdf | `python -m pip install -e .`（已包含 pypdf）后重跑 |
 | 上传提示「请上传 md/pdf/docx」 | 只支持这些后缀；刷新页面后再传 |
 | 任务一直「生成中」、日志不再更新 | 多半是服务被重启、进程没了，点「重新整跑」 |

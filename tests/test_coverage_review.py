@@ -291,9 +291,7 @@ def test_config_artifact_paths(tmp_path):
     )
     assert cfg.coverage_matrix_path == tmp_path / "out" / "coverage-matrix.md"
     assert cfg.qa_review_path == tmp_path / "out" / "qa-review.md"
-    assert cfg.test_plan_mindmap_md_path == tmp_path / "out" / "test-plan-mindmap.md"
-    assert cfg.test_plan_mindmap_mm_path == tmp_path / "out" / "test-plan.mm"
-    assert cfg.test_plan_mindmap_opml_path == tmp_path / "out" / "test-plan.opml"
+    assert cfg.test_requirements_drawio_path == tmp_path / "out" / "test-requirements.drawio"
 
 
 def test_testcases_requires_matrix(tmp_path):

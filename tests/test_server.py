@@ -14,6 +14,7 @@ import pytest
 
 from qagent.agent.llm import MockLLM
 from qagent.parsing import parse_cases
+from qagent.config import public_llm_settings, update_local_llm
 from qagent.server.app import create_handler
 from qagent.server.chat import apply_actions, run_chat
 from qagent.server.feishu import handle_feishu_event
@@ -148,8 +149,8 @@ def test_patch_upsert_delete_and_validate(tmp_path):
     result = validate_and_export(store, job.id, fill_gaps=True)
     assert result["ok"], result.get("errors")
     assert (store.output_dir(job.id) / "testcases.xlsx").is_file()
-    assert (store.output_dir(job.id) / "test-plan-mindmap.md").is_file()
-    assert (store.output_dir(job.id) / "test-plan.opml").is_file()
+    assert (store.output_dir(job.id) / "test-requirements.drawio").is_file()
+    assert not (store.output_dir(job.id) / "test-plan.drawio").exists()
 
 
 def test_upsert_fills_missing_requirement_ref(tmp_path):
@@ -496,3 +497,60 @@ def test_chat_keeps_good_case_drops_bad_on_validate(tmp_path):
     assert "TC-REG-008" in after
     assert "INVALID" not in after
     assert before_ids <= after
+
+
+def test_update_local_llm_writes_and_masks(tmp_path):
+    (tmp_path / "qagent.yaml").write_text("language: zh\n", encoding="utf-8")
+    out = update_local_llm(api_key="sk-abcdefghijklmnop", model="gpt-test", workspace=tmp_path)
+    assert out["api_key_configured"] is True
+    assert out["api_key_hint"] == "sk-••••mnop"
+    assert out["api_key_source"] == "file"
+    assert "abcdefgh" not in json.dumps(out)
+    text = (tmp_path / "qagent.local.yaml").read_text(encoding="utf-8")
+    assert "sk-abcdefghijklmnop" in text
+    again = update_local_llm(base_url="https://example.com/v1/", workspace=tmp_path)
+    assert again["model"] == "gpt-test"
+    assert again["base_url"] == "https://example.com/v1"
+    assert public_llm_settings(tmp_path)["api_key_configured"] is True
+
+
+def test_http_settings_roundtrip(tmp_path, monkeypatch):
+    (tmp_path / "qagent.yaml").write_text("language: zh\n", encoding="utf-8")
+    monkeypatch.setattr("qagent.config.find_workspace_root", lambda start=None: tmp_path)
+    store = JobStore(tmp_path / "jobs")
+    service = QAgentService(store, llm_factory=lambda: MockLLM({}))
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(service))
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    port = httpd.server_address[1]
+    try:
+        empty = json.loads(urlopen(f"http://127.0.0.1:{port}/api/settings", timeout=3).read())
+        assert empty["api_key_configured"] is False
+        req = Request(
+            f"http://127.0.0.1:{port}/api/settings",
+            data=json.dumps({"api_key": "sk-secretkey9999", "model": "demo-model"}).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        saved = json.loads(urlopen(req, timeout=3).read())
+        assert saved["api_key_configured"] is True
+        assert "secretkey" not in json.dumps(saved)
+        assert saved["model"] == "demo-model"
+        got = json.loads(urlopen(f"http://127.0.0.1:{port}/api/settings", timeout=3).read())
+        assert got["api_key_hint"].endswith("9999")
+    finally:
+        httpd.shutdown()
+
+
+def test_public_job_includes_deliverables(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    service = QAgentService(store, llm_factory=lambda: MockLLM({}))
+    job = store.create()
+    (store.output_dir(job.id) / "test-requirements.md").write_text("# 需求\n", encoding="utf-8")
+    (store.output_dir(job.id) / "test-requirements.drawio").write_text("<mxfile/>", encoding="utf-8")
+    store.refresh_artifacts(job.id)
+    got = service.get_job(job.id)
+    titles = [d["title"] for d in got["deliverables"]]
+    assert titles == ["测试需求", "需求导图"]
+    assert got["deliverables"][0]["role"] == "测什么、不测什么"
+    assert got["deliverables"][1]["file"] == "test-requirements.drawio"

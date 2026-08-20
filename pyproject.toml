@@ -21,6 +21,9 @@ dev = ["pytest>=7.0"]
 [project.scripts]
 qagent = "qagent.cli:main"
 
+[tool.setuptools]
+include-package-data = true
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["qagent*"]
