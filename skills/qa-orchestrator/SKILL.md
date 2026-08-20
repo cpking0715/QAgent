@@ -37,8 +37,7 @@ Task Progress:
 - [ ] Step 0.5: 范围不清时先对话确认，写入 input/测试需求.md（可跳过）
 - [ ] Step 0: qagent generate <需求文件> --out <输出目录>（初始化流水线状态）
 - [ ] Step 1: 解析需求（PRD + 设计文档合并摄入）
-- [ ] Step 2: 生成 {output_dir}/test-requirements.md（详细测试需求，穷举可测点）
-- [ ] Step 2: 生成 {output_dir}/test-requirements.md 及 {output_dir}/test-requirements.drawio
+- [ ] Step 2: 生成 {output_dir}/test-requirements.md 及导图（.drawio / .xmind）
 - [ ] Step 3: 生成 {output_dir}/test-plan.md（基于测试需求）
 - [ ] Step 4: 生成 {output_dir}/risk.md
 - [ ] Step 5: 生成 {output_dir}/coverage-matrix.md（覆盖契约，先于用例）

@@ -1,18 +1,116 @@
-"""用例、测试方案、风险分析校验。"""
+"""用例、测试方案、风险分析校验。
+
+full_validate 是对全部产物的编排校验（CLI / Runner / 对话修订工具共用），
+其余 validate_* 为单项校验原语。
+"""
 
 from __future__ import annotations
 
-import re
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from qagent.config import QAgentConfig
-from qagent.parsing import CoverageRow, ReviewTraceRow, RiskItem, ref_ids
-from qagent.schema import TestcaseSchema
+from qagent.parsing import (
+    SC_ID_RE,
+    CoverageRow,
+    ReviewTraceRow,
+    RiskItem,
+    parse_cases,
+    parse_coverage_matrix,
+    parse_requirement_ids,
+    parse_review_trace,
+    parse_risks,
+    ref_ids,
+)
+from qagent.schema import TestcaseSchema, load_schema
 
 MATRIX_CATEGORIES = {"Happy", "Boundary", "Negative", "Security", "State", "Concurrency"}
 REVIEW_VERDICTS = {"COVERED", "GAP", "DUPLICATE", "WEAK"}
 GAP_EMPTY_CASE_IDS = {"—", "-", "空"}
-SC_ID_RE = re.compile(r"^SC-\d{3}$")
+
+
+@dataclass
+class ValidateOutcome:
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    cases: list[dict] = field(default_factory=list)
+    requirement_ids: set[str] = field(default_factory=set)
+
+
+def full_validate(
+    config: QAgentConfig,
+    *,
+    cases_path: Path | None = None,
+    plan_path: Path | None = None,
+    risk_path: Path | None = None,
+    matrix_path: Path | None = None,
+    review_path: Path | None = None,
+) -> ValidateOutcome:
+    """按 config（可用路径参数覆盖）校验全部产物，聚合 errors/warnings。
+
+    路径缺省时取 config 的产物路径；文件不存在时按可选项跳过对应校验。
+    """
+    outcome = ValidateOutcome()
+    cases_path = cases_path or config.testcases_path
+    plan_path = plan_path or config.test_plan_path
+    risk_path = risk_path or config.risk_path
+    matrix_path = matrix_path or config.coverage_matrix_path
+    review_path = review_path or config.qa_review_path
+    schema = load_schema(config.schema_path)
+
+    try:
+        outcome.cases = parse_cases(cases_path)
+    except ValueError as exc:
+        outcome.errors.append(str(exc))
+        return outcome
+
+    if plan_path.is_file():
+        outcome.errors.extend(validate_plan_structure(plan_path, schema))
+
+    outcome.requirement_ids = (
+        parse_requirement_ids(plan_path) if plan_path.is_file() else set()
+    )
+    case_errors, case_warnings = validate_cases(
+        outcome.cases, outcome.requirement_ids, schema, config,
+    )
+    outcome.errors.extend(case_errors)
+    outcome.warnings.extend(case_warnings)
+
+    if risk_path.is_file():
+        try:
+            risks = parse_risks(risk_path)
+            risk_errors, risk_warnings = validate_risk_coverage(
+                outcome.cases, risks, schema,
+            )
+            outcome.errors.extend(risk_errors)
+            outcome.warnings.extend(risk_warnings)
+        except ValueError as exc:
+            outcome.errors.append(f"risk.md 解析失败: {exc}")
+
+    if not matrix_path.is_file():
+        outcome.errors.append(f"缺少文件: {matrix_path}")
+    if not review_path.is_file():
+        outcome.errors.append(f"缺少文件: {review_path}")
+    if matrix_path.is_file() and review_path.is_file() and plan_path.is_file():
+        try:
+            matrix_rows = parse_coverage_matrix(matrix_path)
+            review_rows = parse_review_trace(review_path)
+            m_err, m_warn = validate_matrix(matrix_rows, outcome.requirement_ids, config)
+            outcome.errors.extend(m_err)
+            outcome.warnings.extend(m_warn)
+            case_ids = {str(c.get("id")) for c in outcome.cases if c.get("id")}
+            r_err, r_warn = validate_review_trace(
+                review_rows,
+                {row.scenario_id for row in matrix_rows},
+                case_ids,
+                config,
+            )
+            outcome.errors.extend(r_err)
+            outcome.warnings.extend(r_warn)
+        except ValueError as exc:
+            outcome.errors.append(str(exc))
+
+    return outcome
 
 
 def validate_cases(
@@ -95,7 +193,7 @@ def validate_matrix(
     covered: set[str] = set()
     for row in rows:
         sid = row.scenario_id
-        if not SC_ID_RE.match(sid):
+        if not SC_ID_RE.fullmatch(sid):
             errors.append(f"{sid}: 场景ID 不符合 SC-NNN")
         if sid in seen:
             errors.append(f"{sid}: 场景ID 重复")

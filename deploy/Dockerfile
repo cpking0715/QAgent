@@ -10,7 +10,7 @@ COPY qagent ./qagent
 COPY templates ./templates
 COPY skills ./skills
 
-RUN pip install --no-cache-dir -e . pypdf python-docx \
+RUN pip install --no-cache-dir -e . \
     && mkdir -p /data/qagent/jobs
 
 EXPOSE 8765

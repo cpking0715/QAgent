@@ -1,34 +1,45 @@
-"""QAgent HTTP 服务：任务 API + Web + 飞书回调。"""
+"""QAgent HTTP 服务：任务 API + Web + SSE 推送。"""
 
 from __future__ import annotations
 
-import cgi
 import json
+import logging
 import mimetypes
+import re
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from qagent.config import public_llm_settings, update_local_llm
 from qagent.ingest import SUPPORTED
-from qagent.server.auth import authorize
+from qagent.server.auth import authorize, configured_token
 from qagent.server.feishu import handle_feishu_event
 from qagent.server.jobs import JobStore, default_jobs_root
 from qagent.server.service import QAgentService
 
+logger = logging.getLogger("qagent.server.app")
+
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+_INDEX_CACHE: bytes | None = None
+SSE_INTERVAL_SECONDS = 1.0
+_TERMINAL_STATUSES = {"ready", "failed", "cancelled", "uploaded"}
 
 
 def _index_html() -> bytes:
+    global _INDEX_CACHE
+    if _INDEX_CACHE is not None:
+        return _INDEX_CACHE
     candidates = [
         Path.cwd() / "qagent" / "server" / "static" / "index.html",
         STATIC_DIR / "index.html",
     ]
     for path in candidates:
         if path.is_file():
-            return path.read_bytes()
+            _INDEX_CACHE = path.read_bytes()
+            return _INDEX_CACHE
     raise FileNotFoundError("缺少 qagent/server/static/index.html，请在仓库根目录运行 qagent serve")
 
 
@@ -54,30 +65,57 @@ def _read_json(handler: BaseHTTPRequestHandler) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _multipart_fields(form: cgi.FieldStorage, *names: str) -> list:
-    """cgi.FieldStorage.getlist() 返回的是文件内容而非字段对象，不能用来取 filename。"""
-    wanted = set(names)
-    items = []
-    for item in form.list or []:
-        if getattr(item, "name", None) in wanted:
-            items.append(item)
-    return items
+def _multipart_boundary(content_type: str) -> str:
+    match = re.search(r'boundary="?([^";]+)"?', content_type)
+    return match.group(1) if match else ""
 
 
-def _uploads_from_form(form: cgi.FieldStorage) -> list[tuple[str, bytes]]:
+def _parse_multipart(body: bytes, boundary: str) -> list[dict]:
+    """解析 multipart/form-data（替代 cgi.FieldStorage，兼容 Python 3.12+）。
+
+    返回 [{"name", "filename"|"", "data"}]，解析失败返回空列表。
+    """
+    if not boundary:
+        return []
+    delim = b"--" + boundary.encode("utf-8")
+    fields: list[dict] = []
+    for section in body.split(delim)[1:]:
+        if section[:2] == b"--":  # 结束边界
+            break
+        section = section.lstrip(b"\r\n")
+        head, sep, content = section.partition(b"\r\n\r\n")
+        if not sep:
+            continue
+        if content.endswith(b"\r\n"):
+            content = content[:-2]
+        headers_text = head.decode("utf-8", errors="replace")
+        name = ""
+        filename = ""
+        disposition = ""
+        for line in headers_text.splitlines():
+            lower = line.lower()
+            if lower.startswith("content-disposition:"):
+                disposition = line
+        name_match = re.search(r'name="([^"]*)"', disposition)
+        file_match = re.search(r'filename="([^"]*)"', disposition)
+        if name_match:
+            name = name_match.group(1)
+        if file_match:
+            filename = file_match.group(1)
+        fields.append({"name": name, "filename": filename, "data": content})
+    return fields
+
+
+def _uploads_from_multipart(body: bytes, content_type: str) -> list[tuple[str, bytes]]:
     uploads: list[tuple[str, bytes]] = []
-    for item in _multipart_fields(form, "files", "file"):
-        filename = getattr(item, "filename", None) or ""
-        name = Path(str(filename)).name
+    for field in _parse_multipart(body, _multipart_boundary(content_type)):
+        if field["name"] not in {"files", "file"}:
+            continue
+        name = Path(field["filename"] or "").name
         if not name or Path(name).suffix.lower() not in SUPPORTED:
             continue
-        if getattr(item, "file", None):
-            data = item.file.read()
-        else:
-            value = item.value
-            data = value if isinstance(value, bytes) else str(value).encode("utf-8")
-        if data:
-            uploads.append((name, data))
+        if field["data"]:
+            uploads.append((name, field["data"]))
     return uploads
 
 
@@ -115,7 +153,9 @@ def create_handler(service: QAgentService):
                 _json(self, 200, public_llm_settings())
                 return
             if path == "/api/jobs":
-                _json(self, 200, {"jobs": service.list_jobs(None)})
+                _json(self, 200, {"jobs": service.list_jobs(
+                    owner if owner != "anonymous" else None,
+                )})
                 return
             parts = path.split("/")
             if len(parts) == 4 and parts[1:3] == ["api", "jobs"]:
@@ -123,6 +163,9 @@ def create_handler(service: QAgentService):
                     _json(self, 200, service.get_job(parts[3]))
                 except FileNotFoundError as exc:
                     _json(self, 404, {"error": str(exc)})
+                return
+            if len(parts) == 5 and parts[1:3] == ["api", "jobs"] and parts[4] == "events":
+                self._sse_events(parts[3], parsed.query)
                 return
             if len(parts) == 6 and parts[1:3] == ["api", "jobs"] and parts[4] == "artifacts":
                 try:
@@ -178,7 +221,12 @@ def create_handler(service: QAgentService):
             if len(parts) == 5 and parts[1:3] == ["api", "jobs"] and parts[4] == "run":
                 try:
                     body = _read_json(self)
-                    _json(self, 200, service.start_run(parts[3], str(body.get("from") or "requirements")))
+                    stop_after = body.get("stop_after") or None
+                    if stop_after is not None and not isinstance(stop_after, str):
+                        stop_after = None
+                    _json(self, 200, service.start_run(
+                        parts[3], str(body.get("from") or "requirements"), stop_after,
+                    ))
                 except (FileNotFoundError, RuntimeError, ValueError) as exc:
                     _json(self, 400, {"error": str(exc)})
                 return
@@ -193,6 +241,27 @@ def create_handler(service: QAgentService):
                     body = _read_json(self)
                     _json(self, 200, service.start_chat(parts[3], str(body.get("message") or "")))
                 except (FileNotFoundError, RuntimeError, ValueError) as exc:
+                    _json(self, 400, {"error": str(exc)})
+                return
+            self.send_error(404)
+
+        def do_PUT(self):
+            parsed = urlparse(self.path)
+            path = parsed.path.rstrip("/") or "/"
+            owner = self._auth()
+            if owner is None:
+                return
+            parts = path.split("/")
+            # PUT /api/jobs/{id}/artifacts/{name} —— 人工修改产物（分阶段确认工作流）
+            if len(parts) == 6 and parts[1:3] == ["api", "jobs"] and parts[4] == "artifacts":
+                try:
+                    body = _read_json(self)
+                    _json(self, 200, service.save_artifact(
+                        parts[3], parts[5], str(body.get("content") or ""),
+                    ))
+                except FileNotFoundError as exc:
+                    _json(self, 404, {"error": str(exc)})
+                except (ValueError, RuntimeError) as exc:
                     _json(self, 400, {"error": str(exc)})
                 return
             self.send_error(404)
@@ -217,20 +286,48 @@ def create_handler(service: QAgentService):
                 return
             self.send_error(404)
 
+        def _sse_events(self, job_id: str, query: str) -> None:
+            """SSE 推送任务状态/日志变化；EventSource 无法带 header，token 走 query。"""
+            expected = configured_token()
+            if expected:
+                token = (parse_qs(query).get("token") or [""])[0]
+                if token != expected:
+                    _json(self, 401, {"error": "未授权"})
+                    return
+            try:
+                job = service.get_job(job_id)
+            except FileNotFoundError as exc:
+                _json(self, 404, {"error": str(exc)})
+                return
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Accel-Buffering", "no")
+                self.end_headers()
+                last = ""
+                while True:
+                    job = service.get_job(job_id)
+                    snapshot = json.dumps(job, ensure_ascii=False, sort_keys=True)
+                    if snapshot != last:
+                        last = snapshot
+                        self.wfile.write(f"data: {snapshot}\n\n".encode("utf-8"))
+                        self.wfile.flush()
+                    if job.get("status") in _TERMINAL_STATUSES:
+                        break
+                    time.sleep(SSE_INTERVAL_SECONDS)
+            except (BrokenPipeError, ConnectionResetError):
+                return  # 客户端断开
+            except Exception:
+                logger.exception("SSE 推送异常 job=%s", job_id)
+
         def _create_job(self, owner: str) -> None:
             content_type = self.headers.get("Content-Type", "")
             uploads: list[tuple[str, bytes]] = []
             if "multipart/form-data" in content_type:
-                form = cgi.FieldStorage(
-                    fp=self.rfile,
-                    headers=self.headers,
-                    environ={
-                        "REQUEST_METHOD": "POST",
-                        "CONTENT_TYPE": content_type,
-                        "CONTENT_LENGTH": self.headers.get("Content-Length") or "0",
-                    },
-                )
-                uploads = _uploads_from_form(form)
+                length = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(length) if length else b""
+                uploads = _uploads_from_multipart(body, content_type)
             if not uploads:
                 _json(self, 400, {"error": "请上传 md/pdf/docx 文档"})
                 return
@@ -249,6 +346,13 @@ def serve(
 ) -> None:
     job_store = store or JobStore(default_jobs_root())
     app = service or QAgentService(job_store)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    stale = job_store.mark_stale_on_startup()
+    if stale:
+        logger.warning("服务重启：%d 个中断任务已标记为 failed（可续跑）", stale)
     httpd = ThreadingHTTPServer((host, port), create_handler(app))
     url = f"http://{host}:{port}/"
     print(f"[QAgent] 服务已启动 {url}  任务目录 {job_store.root}", flush=True)

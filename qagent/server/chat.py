@@ -1,4 +1,8 @@
-"""修订对话：LLM 只输出 JSON 动作，脚本改文件并校验。"""
+"""修订对话：LLM 只输出 JSON 动作，脚本改文件并校验。
+
+SYSTEM 提示词中的枚举与数值约束从 templates/（schema + rules.yaml）渲染，
+不在此处手写，避免契约漂移。
+"""
 
 from __future__ import annotations
 
@@ -8,10 +12,14 @@ from typing import Any
 
 from qagent.agent.llm import LLMClient
 from qagent.agent.prompts import extract_document
+from qagent.config import QAgentConfig
 from qagent.parsing import parse_cases, parse_requirement_items
+from qagent.rules import load_rules
+from qagent.schema import load_schema
 from qagent.server.jobs import JobStore
 from qagent.server.scope import artifact_has_perf, write_user_scope
 from qagent.server.tools import (
+    job_config,
     delete_cases,
     patch_plan,
     read_artifact,
@@ -21,7 +29,7 @@ from qagent.server.tools import (
     validate_and_export,
 )
 
-SYSTEM = """你是 QAgent 修订助手。只能改当前任务已生成的测试产物，不能编造未上传文档里的 API。
+_SYSTEM_TEMPLATE = """你是 QAgent 修订助手。只能改当前任务已生成的测试产物，不能编造未上传文档里的 API。
 用户要用自然语言补充或修改测试方案/用例。你必须只输出一个 JSON 对象（不要 Markdown 解释），格式：
 {
   "reply": "给用户的中文说明",
@@ -37,12 +45,24 @@ SYSTEM = """你是 QAgent 修订助手。只能改当前任务已生成的测试
 规则：
 - 能局部改就不要 rerun。rerun 只在用户明确要求重跑时使用。
 - 改完方案或用例后必须带一条 validate_and_export。
-- 不要一次输出超过 8 条用例。
+- 不要一次输出超过 {max_cases_per_action} 条用例。
 - upsert 每条必须带 requirement_ref，且只能是当前方案里已有的 R 编号。
-- type 只能是 功能/边界/异常/安全/组合。性能、压力、SLA 类用例 type 用「功能」，design_method 用「场景法」。
+- type 只能是 {type_enum}。性能、压力、SLA 类用例 type 用「功能」，design_method 用「场景法」。
 - 用户要补性能/安全等用例时：先对到方案中含 SLA/性能/权限 的 R；没有对应 R 时先 patch_plan 加一条再 upsert。
 - 用户只是询问有没有某类用例时，可以只 read_artifact；一旦要求「补充」，必须 upsert。
 """
+
+
+def system_prompt(config: QAgentConfig) -> str:
+    schema = load_schema(config.schema_path)
+    rules = load_rules(config.rules_path)
+    type_enum = "/".join(sorted(schema.enum_fields.get("type") or [])) or "功能/边界/异常/安全/组合"
+    # 模板含 JSON 字面量大括号，只能用 token 替换而非 str.format
+    return (
+        _SYSTEM_TEMPLATE
+        .replace("{max_cases_per_action}", str(rules.chat_max_cases_per_action))
+        .replace("{type_enum}", type_enum)
+    )
 
 
 def _parse_actions(text: str) -> dict[str, Any]:
@@ -162,6 +182,44 @@ def _drop_bad_new_cases(
     return bad
 
 
+_EFFECT_OPS = {"patch_plan", "upsert_cases", "delete_cases", "validate_and_export", "rerun"}
+
+
+def _llm_actions(
+    llm: LLMClient,
+    system: str,
+    base_user: str,
+    store: JobStore,
+    job_id: str,
+    max_rounds: int = 2,
+) -> dict:
+    """最多两轮：第一轮只读不写时，把读取结果回流给 LLM 再决策一次。"""
+    user = base_user
+    parsed: dict = {"reply": "", "actions": []}
+    for round_index in range(max_rounds):
+        parsed = _parse_actions(llm.complete(system, user))
+        actions = parsed.get("actions") or []
+        reads = [a for a in actions if str(a.get("op") or "") == "read_artifact"]
+        has_effect = any(str(a.get("op") or "") in _EFFECT_OPS for a in actions)
+        if reads and not has_effect and round_index < max_rounds - 1:
+            notes = [
+                read_artifact(
+                    store, job_id,
+                    str(a.get("name") or "plan"),
+                    str(a.get("query") or ""),
+                )
+                for a in reads[:2]
+            ]
+            user = (
+                base_user
+                + "\n\n【上一轮 read_artifact 的结果，请据此给出具体修改动作】\n"
+                + "\n".join(notes)
+            )
+            continue
+        break
+    return parsed
+
+
 def run_chat(
     store: JobStore,
     job_id: str,
@@ -178,9 +236,7 @@ def run_chat(
     meta = store.load(job_id)
     if meta.awaiting_scope:
         write_user_scope(store, job_id, message)
-        meta = store.load(job_id)
-        meta.awaiting_scope = False
-        store.save_meta(meta)
+        store.update(job_id, lambda m: setattr(m, "awaiting_scope", False))
         reply = "范围已记下，开始生成测试方案和用例。"
         store.append_chat(job_id, "assistant", reply)
         return {"ok": True, "reply": reply, "notes": [], "rerun": "requirements"}
@@ -190,7 +246,7 @@ def run_chat(
         f"最近对话：{json.dumps(history, ensure_ascii=False)}\n"
         f"用户：{message}"
     )
-    parsed = _parse_actions(llm.complete(SYSTEM, user))
+    parsed = _llm_actions(llm, system_prompt(job_config(store, job_id)), user, store, job_id)
     existing_ids = _case_ids(store, job_id)
     snapshot_output(store, job_id)
     try:

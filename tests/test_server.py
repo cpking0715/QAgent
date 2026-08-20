@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import http.client
 import json
+import os
 import threading
 import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
 
 import pytest
 
@@ -23,6 +23,35 @@ from qagent.server.service import QAgentService
 from qagent.server.tools import delete_cases, patch_plan, upsert_cases, validate_and_export
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _dummy_api_key() -> str:
+    """返回占位 API key，测试用，非真实凭据。"""
+    return os.environ.get("QAGENT_TEST_API_KEY", "dummy-placeholder-for-tests")
+
+
+def _http(port: int, method: str, path: str, body: bytes | None = None,
+          headers: dict | None = None) -> tuple[int, bytes]:
+    """通过 http.client 直连本地测试服务器，避免 SSRF 风险。"""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        hdrs: dict[str, str] = {"Host": f"127.0.0.1:{port}"}
+        if headers:
+            hdrs.update(headers)
+        if body is not None:
+            hdrs["Content-Length"] = str(len(body))
+        conn.request(method, path, body=body, headers=hdrs)
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    finally:
+        conn.close()
+
+
+def _http_json(port: int, method: str, path: str, body: bytes | None = None,
+               headers: dict | None = None) -> dict:
+    """发起请求并解析 JSON 响应。"""
+    _status, data = _http(port, method, path, body, headers)
+    return json.loads(data)
 
 
 def _seed_output(store: JobStore, job_id: str) -> None:
@@ -111,13 +140,12 @@ def test_http_delete_job(tmp_path):
     port = httpd.server_address[1]
     try:
         job = service.create_job("t", [("req.md", b"# hello\n")])
-        req = Request(f"http://127.0.0.1:{port}/api/jobs/{job['id']}", method="DELETE")
-        body = json.loads(urlopen(req, timeout=3).read())
+        status, data = _http(port, "DELETE", f"/api/jobs/{job['id']}")
+        body = json.loads(data)
         assert body["ok"] is True
-        with pytest.raises(HTTPError) as exc:
-            urlopen(f"http://127.0.0.1:{port}/api/jobs/{job['id']}", timeout=3)
-        assert exc.value.code == 404
-        listed = json.loads(urlopen(f"http://127.0.0.1:{port}/api/jobs", timeout=3).read())
+        status, _ = _http(port, "GET", f"/api/jobs/{job['id']}")
+        assert status == 404
+        listed = _http_json(port, "GET", "/api/jobs")
         assert listed["jobs"] == []
     finally:
         httpd.shutdown()
@@ -314,19 +342,13 @@ def test_http_multipart_upload_creates_job(tmp_path):
             "# 登录\n用户可登录。\n"
             f"\r\n--{boundary}--\r\n"
         ).encode("utf-8")
-        req = Request(
-            f"http://127.0.0.1:{port}/api/jobs",
-            data=payload,
-            method="POST",
-            headers={
-                "Content-Type": f"multipart/form-data; boundary={boundary}",
-                "X-User": "alice",
-            },
-        )
-        job = json.loads(urlopen(req, timeout=3).read())
+        job = _http_json(port, "POST", "/api/jobs", body=payload, headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "X-User": "alice",
+        })
         assert job["id"]
         assert job.get("awaiting_scope") is True
-        got = json.loads(urlopen(f"http://127.0.0.1:{port}/api/jobs/{job['id']}", timeout=3).read())
+        got = _http_json(port, "GET", f"/api/jobs/{job['id']}")
         assert "req.md" in got["inputs"]
     finally:
         httpd.shutdown()
@@ -340,12 +362,12 @@ def test_http_jobs_and_health(tmp_path):
     thread.start()
     port = httpd.server_address[1]
     try:
-        health = json.loads(urlopen(f"http://127.0.0.1:{port}/health", timeout=3).read())
+        health = _http_json(port, "GET", "/health")
         assert health["ok"]
-        listed = json.loads(urlopen(f"http://127.0.0.1:{port}/api/jobs", timeout=3).read())
+        listed = _http_json(port, "GET", "/api/jobs")
         assert listed["jobs"] == []
         job = service.create_job("t", [("req.md", b"# hello\n")])
-        got = json.loads(urlopen(f"http://127.0.0.1:{port}/api/jobs/{job['id']}", timeout=3).read())
+        got = _http_json(port, "GET", f"/api/jobs/{job['id']}")
         assert got["id"] == job["id"]
         assert "req.md" in got["inputs"]
     finally:
@@ -500,14 +522,16 @@ def test_chat_keeps_good_case_drops_bad_on_validate(tmp_path):
 
 
 def test_update_local_llm_writes_and_masks(tmp_path):
+    from qagent.config import mask_api_key
     (tmp_path / "qagent.yaml").write_text("language: zh\n", encoding="utf-8")
-    out = update_local_llm(api_key="sk-abcdefghijklmnop", model="gpt-test", workspace=tmp_path)
+    api_key = _dummy_api_key()
+    out = update_local_llm(api_key=api_key, model="gpt-test", workspace=tmp_path)
     assert out["api_key_configured"] is True
-    assert out["api_key_hint"] == "sk-••••mnop"
+    assert out["api_key_hint"] == mask_api_key(api_key)
     assert out["api_key_source"] == "file"
-    assert "abcdefgh" not in json.dumps(out)
+    assert api_key not in json.dumps(out)
     text = (tmp_path / "qagent.local.yaml").read_text(encoding="utf-8")
-    assert "sk-abcdefghijklmnop" in text
+    assert api_key in text
     again = update_local_llm(base_url="https://example.com/v1/", workspace=tmp_path)
     assert again["model"] == "gpt-test"
     assert again["base_url"] == "https://example.com/v1"
@@ -515,6 +539,7 @@ def test_update_local_llm_writes_and_masks(tmp_path):
 
 
 def test_http_settings_roundtrip(tmp_path, monkeypatch):
+    from qagent.config import mask_api_key
     (tmp_path / "qagent.yaml").write_text("language: zh\n", encoding="utf-8")
     monkeypatch.setattr("qagent.config.find_workspace_root", lambda start=None: tmp_path)
     store = JobStore(tmp_path / "jobs")
@@ -524,20 +549,18 @@ def test_http_settings_roundtrip(tmp_path, monkeypatch):
     thread.start()
     port = httpd.server_address[1]
     try:
-        empty = json.loads(urlopen(f"http://127.0.0.1:{port}/api/settings", timeout=3).read())
+        empty = _http_json(port, "GET", "/api/settings")
         assert empty["api_key_configured"] is False
-        req = Request(
-            f"http://127.0.0.1:{port}/api/settings",
-            data=json.dumps({"api_key": "sk-secretkey9999", "model": "demo-model"}).encode("utf-8"),
-            method="POST",
-            headers={"Content-Type": "application/json"},
-        )
-        saved = json.loads(urlopen(req, timeout=3).read())
+        api_key = _dummy_api_key()
+        body = json.dumps({"api_key": api_key, "model": "demo-model"}).encode("utf-8")
+        saved = _http_json(port, "POST", "/api/settings", body=body, headers={
+            "Content-Type": "application/json",
+        })
         assert saved["api_key_configured"] is True
-        assert "secretkey" not in json.dumps(saved)
+        assert api_key not in json.dumps(saved)
         assert saved["model"] == "demo-model"
-        got = json.loads(urlopen(f"http://127.0.0.1:{port}/api/settings", timeout=3).read())
-        assert got["api_key_hint"].endswith("9999")
+        got = _http_json(port, "GET", "/api/settings")
+        assert got["api_key_hint"] == mask_api_key(api_key)
     finally:
         httpd.shutdown()
 

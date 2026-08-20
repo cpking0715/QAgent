@@ -117,15 +117,24 @@ def load_workspace_test_requirements(workspace: Path) -> str | None:
 def merge_documents(
     paths: list[Path],
     test_requirements_text: str | None = None,
+    contents: dict[Path, str] | None = None,
 ) -> str:
-    """合并产品需求文档；测试需求单独成章置于最前。"""
+    """合并产品需求文档；测试需求单独成章置于最前。
+
+    contents: 预读取的文档内容（键为 resolve 后的路径），传入时不再重复读盘。
+    """
     product_paths, test_paths = split_document_paths(paths)
+
+    def _content(path: Path) -> str:
+        if contents is not None:
+            return contents[path.resolve()].strip()
+        return read_document(path).strip()
 
     test_sections: list[str] = []
     if test_requirements_text:
         test_sections.append(test_requirements_text.strip())
     for path in test_paths:
-        test_sections.append(f"### 来源: {path.name}\n\n{read_document(path).strip()}")
+        test_sections.append(f"### 来源: {path.name}\n\n{_content(path)}")
 
     body_parts: list[str] = ["# 合并需求文档\n"]
     if test_sections:
@@ -141,7 +150,7 @@ def merge_documents(
             raise ValueError("至少需要一份产品需求或测试需求文档")
     else:
         for path in product_paths:
-            content = read_document(path).strip()
+            content = _content(path)
             if content:
                 body_parts.append(f"\n---\n\n### 文档: {path.name}\n\n{content}\n")
 
@@ -156,7 +165,7 @@ def ingest(
     compiled_path: Path,
     workspace: Path | None = None,
 ) -> IngestResult:
-    """摄入文档并写入 compiled 文件。"""
+    """摄入文档并写入 compiled 文件。每个文档只解析一次。"""
     paths = collect_documents(source)
     product_paths, test_paths = split_document_paths(paths)
 
@@ -164,14 +173,17 @@ def ingest(
     if workspace:
         extra_test = load_workspace_test_requirements(workspace)
 
+    contents = {p.resolve(): read_document(p) for p in paths}
     test_parts = []
     if extra_test:
         test_parts.append(extra_test)
     for p in test_paths:
-        test_parts.append(read_document(p).strip())
+        test_parts.append(contents[p.resolve()].strip())
     test_text = "\n\n".join(test_parts) if test_parts else None
 
-    merged = merge_documents(paths, test_requirements_text=extra_test)
+    merged = merge_documents(
+        paths, test_requirements_text=extra_test, contents=contents,
+    )
     compiled_path.parent.mkdir(parents=True, exist_ok=True)
     compiled_path.write_text(merged, encoding="utf-8")
 

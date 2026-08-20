@@ -20,6 +20,10 @@ class LLMConfig:
     api_key_env: str = "OPENAI_API_KEY"
     temperature: float = 0.2
     max_tokens: int = 8192
+    timeout: int = 600              # 单次请求超时（秒）
+    retries: int = 3                # 429/5xx/网络错误的重试次数
+    backoff_seconds: float = 1.0    # 重试退避基数（指数退避：1x/2x/4x）
+    stream: bool = False            # 流式输出：可在 chunk 间响应取消（取消延迟秒级）
 
     def resolve_api_key(self, cli_override: str | None = None) -> str:
         """优先级：CLI > 配置文件 api_key > 环境变量。"""
@@ -102,6 +106,16 @@ class QAgentConfig:
     strict_coverage: bool = False
     skill_root: Path | None = None
     llm: LLMConfig = field(default_factory=LLMConfig)
+    # 批次 prompt 上下文模式：full=携带上游产物全文（现状）；sliced=按预算截断并按批过滤 R
+    prompt_context_mode: str = "full"
+    prompt_treq_budget: int = 6000
+    prompt_plan_budget: int = 3000
+    prompt_risk_budget: int = 3000
+
+    @property
+    def rules_path(self) -> Path:
+        candidate = self.templates_dir / "rules.yaml"
+        return candidate if candidate.is_file() else REPO_ROOT / "templates" / "rules.yaml"
 
     @property
     def test_requirements_path(self) -> Path:
@@ -246,10 +260,17 @@ def resolve_config(
             api_key_env=str(llm_raw.get("api_key_env", "OPENAI_API_KEY")),
             temperature=float(llm_raw.get("temperature", 0.2)),
             max_tokens=int(llm_raw.get("max_tokens", 8192)),
+            timeout=int(llm_raw.get("timeout", 600)),
+            retries=int(llm_raw.get("retries", 3)),
+            backoff_seconds=float(llm_raw.get("backoff_seconds", 1.0)),
+            stream=bool(llm_raw.get("stream", False)),
         )
     else:
         llm = LLMConfig()
 
+    mode = str(merged.get("prompt_context_mode", "full"))
+    if mode not in {"full", "sliced"}:
+        mode = "full"
     return QAgentConfig(
         workspace=ws,
         input_dir=ws / str(merged["input_dir"]),
@@ -261,4 +282,8 @@ def resolve_config(
         strict_coverage=bool(merged.get("strict_coverage", False)),
         skill_root=skill,
         llm=llm,
+        prompt_context_mode=mode,
+        prompt_treq_budget=int(merged.get("prompt_treq_budget", 6000)),
+        prompt_plan_budget=int(merged.get("prompt_plan_budget", 3000)),
+        prompt_risk_budget=int(merged.get("prompt_risk_budget", 3000)),
     )

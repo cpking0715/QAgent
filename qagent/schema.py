@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +49,9 @@ class TestcaseSchema:
         return spec.pattern if spec else None
 
 
+@lru_cache(maxsize=16)
 def load_schema(path: Path) -> TestcaseSchema:
+    # schema 文件运行期不变，按路径缓存（返回对象视为只读）
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError(f"Schema 文件格式无效: {path}")

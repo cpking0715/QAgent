@@ -206,6 +206,18 @@
     .drawer header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--line); }
     .drawer header select { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
     .preview { flex: 1; overflow: auto; padding: 16px; white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: #2b2f36; }
+    #previewEdit {
+      flex: 1; width: 100%; min-height: 0; max-height: none; resize: none;
+      padding: 16px; font-size: 13px; line-height: 1.6; font-family: inherit;
+      border: 0; border-top: 1px solid var(--line); outline: none;
+      background: #fff; color: #2b2f36;
+    }
+    .phase-next {
+      margin-top: 10px; border: 0; border-radius: 10px; cursor: pointer;
+      background: linear-gradient(135deg, #5b8cff, #7c5cff); color: #fff;
+      font-size: 13px; font-weight: 600; padding: 9px 16px;
+    }
+    .phase-next:hover { opacity: .92; }
     .modal-bg {
       position: fixed; inset: 0; background: rgba(15,23,42,.28);
       display: none; align-items: center; justify-content: center; z-index: 20;
@@ -283,9 +295,12 @@
   <aside class="drawer" id="drawer">
     <header>
       <select id="previewName"></select>
+      <button class="chip-btn" id="editArtifact">编辑</button>
+      <button class="chip-btn" id="saveArtifact" hidden>保存</button>
       <button class="chip-btn" id="closeDrawer">关闭</button>
     </header>
     <div class="preview" id="preview">选择一份 Markdown 产物查看</div>
+    <textarea id="previewEdit" hidden spellcheck="false"></textarea>
   </aside>
 </div>
 <input id="files" type="file" multiple hidden accept=".md,.txt,.markdown,.pdf,.docx,.doc">
@@ -308,6 +323,28 @@
 const $ = id => document.getElementById(id);
 const STATUS = { uploaded: "待生成", running: "生成中", ready: "已完成", revising: "修订中", failed: "失败", cancelled: "已终止" };
 let current = null, timer = null, pending = [], queuedChat = "", jobBusy = false;
+let evtSource = null, lastListAt = 0;
+function closeEvents() { if (evtSource) { try { evtSource.close(); } catch (e) {} evtSource = null; } }
+function connectEvents(id) {
+  closeEvents();
+  const token = localStorage.getItem("qagent_token") || "";
+  const url = "/api/jobs/" + id + "/events" + (token ? "?token=" + encodeURIComponent(token) : "");
+  try { evtSource = new EventSource(url); } catch (e) { timer = setTimeout(() => select(id), 600); return; }
+  evtSource.onmessage = ev => {
+    if (current !== id) return;
+    let j; try { j = JSON.parse(ev.data); } catch (e) { return; }
+    renderThread(j);
+    refreshJobsThrottled();
+    if (!isBusyStatus(j.status)) closeEvents();
+  };
+  evtSource.onerror = () => { closeEvents(); if (current === id) timer = setTimeout(() => select(id), 600); };
+}
+async function refreshJobsThrottled() {
+  const now = Date.now();
+  if (now - lastListAt < 3000) return;
+  lastListAt = now;
+  await refreshJobs();
+}
 
 function isBusyStatus(s) {
   return s === "running" || s === "revising";
@@ -398,6 +435,11 @@ function thinkingCard(job) {
     ${job.current_step ? `<div class="log-line">进度 ${esc(job.current_step)}</div>` : ""}
     ${last ? `<div class="log-line">${esc(last)}</div>` : ""}
     ${["ready","failed","cancelled"].includes(job.status) ? artCards(job) : ""}
+    ${job.status === "ready" && job.stage && job.stage.done !== "export" ? `
+      <div><button type="button" class="phase-next"
+        data-from="${esc(job.stage.from)}" data-stop="${esc(job.stage.stop_after || "")}">
+        ✓ 确认无误，${esc(job.stage.label)} →</button>
+      <div class="log-line">修改产物可直接点抽屉里的「编辑」，或对话告诉我调整</div></div>` : ""}
   </div>`;
 }
 function pendingReplyHTML() {
@@ -426,11 +468,15 @@ function renderThread(job) {
   }
   $("msgs").innerHTML = parts.join("");
   $("msgs").scrollTop = $("msgs").scrollHeight;
+  $("msgs").querySelectorAll(".phase-next").forEach(b => {
+    b.onclick = () => run(b.dataset.from, b.dataset.stop || null);
+  });
   const mds = Object.values(job.artifacts || {}).filter(f => String(f).endsWith(".md"));
   $("previewName").innerHTML = mds.map(f => `<option>${esc(f)}</option>`).join("");
 }
 function showWelcome() {
   clearTimeout(timer);
+  closeEvents();
   current = null;
   jobBusy = false;
   $("threadBar").hidden = true;
@@ -466,6 +512,7 @@ async function removeJob(id, ev) {
     return;
   }
   if (current === id) {
+    closeEvents();
     showWelcome();
     return;
   }
@@ -491,15 +538,43 @@ async function select(id) {
     return;
   }
   if (isBusyStatus(j.status) && current === id) {
-    timer = setTimeout(() => { if (current === id) select(id); }, 600);
+    connectEvents(id);
   }
 }
 async function loadPreview() {
   if (!current || !$("previewName").value) return;
-  const res = await fetch("/api/jobs/"+current+"/artifacts/"+$("previewName").value, {headers: headers()});
+  const res = await fetch("/api/jobs/"+current+"/artifacts/"+encodeURIComponent($("previewName").value), {headers: headers()});
   const text = await res.text();
   $("preview").textContent = text.slice(0, 20000);
 }
+let editingArtifact = false;
+function setArtifactEditing(on) {
+  editingArtifact = on;
+  $("preview").hidden = on;
+  $("previewEdit").hidden = !on;
+  $("editArtifact").textContent = on ? "取消" : "编辑";
+  $("saveArtifact").hidden = !on;
+}
+$("editArtifact").onclick = async () => {
+  if (!current || !$("previewName").value) return;
+  if (editingArtifact) { setArtifactEditing(false); loadPreview(); return; }
+  const res = await fetch("/api/jobs/"+current+"/artifacts/"+encodeURIComponent($("previewName").value), {headers: headers()});
+  $("previewEdit").value = await res.text();
+  setArtifactEditing(true);
+};
+$("saveArtifact").onclick = async () => {
+  if (!current || !$("previewName").value) return;
+  try {
+    await api("/api/jobs/"+current+"/artifacts/"+encodeURIComponent($("previewName").value), {
+      method:"PUT",
+      headers:{...headers(),"Content-Type":"application/json"},
+      body: JSON.stringify({content: $("previewEdit").value})
+    });
+  } catch (e) { alert(e.message || "保存失败"); return; }
+  setArtifactEditing(false);
+  loadPreview();
+  select(current);  // 刷新阶段与产物状态
+};
 async function createAndRun() {
   if (!pending.length) return;
   const fd = new FormData();
@@ -510,10 +585,11 @@ async function createAndRun() {
   if (!res.ok) { alert(data.error || "创建失败"); return; }
   await select(data.id);
   if (!data.awaiting_scope) {
+    // 分段工作流：先只生成测试需求，确认/修改后再继续方案与用例
     await api("/api/jobs/"+data.id+"/run", {
       method:"POST",
       headers:{...headers(),"Content-Type":"application/json"},
-      body: JSON.stringify({from:"requirements"})
+      body: JSON.stringify({from:"requirements", stop_after:"test_requirements"})
     }).catch(() => {});
     await select(data.id);
   }
@@ -556,12 +632,12 @@ async function send() {
   }
   if (current === id) select(id);
 }
-async function run(from) {
+async function run(from, stop) {
   if (!current) return;
   await api("/api/jobs/"+current+"/run", {
     method:"POST",
     headers:{...headers(),"Content-Type":"application/json"},
-    body: JSON.stringify({from})
+    body: JSON.stringify({from, stop_after: stop || undefined})
   });
   select(current);
 }
@@ -611,8 +687,8 @@ $("toggleDrawer").onclick = () => {
   $("drawer").classList.toggle("open");
   loadPreview();
 };
-$("closeDrawer").onclick = () => $("drawer").classList.remove("open");
-$("previewName").onchange = loadPreview;
+$("closeDrawer").onclick = () => { $("drawer").classList.remove("open"); setArtifactEditing(false); };
+$("previewName").onchange = () => { setArtifactEditing(false); loadPreview(); };
 async function loadLlmSettings() {
   $("apiKey").value = "";
   try {

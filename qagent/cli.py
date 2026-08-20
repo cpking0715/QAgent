@@ -8,7 +8,7 @@ from pathlib import Path
 
 from qagent.config import LLMConfig, QAgentConfig, resolve_config
 from qagent.exporters import ExportContext, get_exporter
-from qagent.parsing import parse_cases, parse_requirement_ids, parse_risks
+from qagent.parsing import parse_cases, parse_requirement_ids
 from qagent.pipeline import (
     PipelineStep,
     check_prerequisites,
@@ -17,74 +17,22 @@ from qagent.pipeline import (
     pipeline_status,
 )
 from qagent.schema import load_schema
-from qagent.validation import validate_cases, validate_plan_structure, validate_risk_coverage
+from qagent.validation import full_validate, validate_cases
 
 
 def _run_validate(config, cases_path: Path, plan_path: Path, risk_path: Path | None) -> int:
-    schema = load_schema(config.schema_path)
-    try:
-        cases = parse_cases(cases_path)
-        requirement_ids = parse_requirement_ids(plan_path)
-    except (OSError, ValueError) as exc:
-        print(f"ERROR: {exc}")
-        return 1
-
-    errors: list[str] = []
-    warnings: list[str] = []
-
-    if plan_path.is_file():
-        errors.extend(validate_plan_structure(plan_path, schema))
-
-    case_errors, case_warnings = validate_cases(cases, requirement_ids, schema, config)
-    errors.extend(case_errors)
-    warnings.extend(case_warnings)
-
-    if risk_path and risk_path.is_file():
-        try:
-            risks = parse_risks(risk_path)
-            risk_errors, risk_warnings = validate_risk_coverage(cases, risks, schema)
-            errors.extend(risk_errors)
-            warnings.extend(risk_warnings)
-        except (OSError, ValueError) as exc:
-            errors.append(f"risk.md 解析失败: {exc}")
-
-    from qagent.parsing import parse_coverage_matrix, parse_review_trace
-    from qagent.validation import validate_matrix, validate_review_trace
-
-    matrix_path = config.coverage_matrix_path
-    review_path = config.qa_review_path
-    if not matrix_path.is_file():
-        errors.append(f"缺少文件: {matrix_path}")
-    if not review_path.is_file():
-        errors.append(f"缺少文件: {review_path}")
-    if matrix_path.is_file() and review_path.is_file() and plan_path.is_file():
-        try:
-            matrix_rows = parse_coverage_matrix(matrix_path)
-            review_rows = parse_review_trace(review_path)
-            m_err, m_warn = validate_matrix(matrix_rows, requirement_ids, config)
-            errors.extend(m_err)
-            warnings.extend(m_warn)
-            case_ids = {str(c.get("id")) for c in cases if c.get("id")}
-            r_err, r_warn = validate_review_trace(
-                review_rows,
-                {row.scenario_id for row in matrix_rows},
-                case_ids,
-                config,
-            )
-            errors.extend(r_err)
-            warnings.extend(r_warn)
-        except ValueError as exc:
-            errors.append(str(exc))
-
-    for warning in warnings:
+    outcome = full_validate(
+        config, cases_path=cases_path, plan_path=plan_path, risk_path=risk_path,
+    )
+    for warning in outcome.warnings:
         print(f"WARNING: {warning}")
-    if errors:
-        for error in errors:
+    if outcome.errors:
+        for error in outcome.errors:
             print(f"ERROR: {error}")
-        print(f"FAILED: 共 {len(errors)} 个错误")
+        print(f"FAILED: 共 {len(outcome.errors)} 个错误")
         return 1
 
-    print(f"OK: {len(cases)} 条用例全部通过校验，需求条目 {len(requirement_ids)} 条")
+    print(f"OK: {len(outcome.cases)} 条用例全部通过校验，需求条目 {len(outcome.requirement_ids)} 条")
     mark_step(config, PipelineStep.VALIDATE)
     return 0
 
@@ -424,8 +372,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--from",
         dest="from_step",
         default="requirements",
-        choices=["requirements", "testcases"],
-        help="testcases=复用已有方案/矩阵，只重跑用例及之后步骤",
+        choices=[
+            "requirements", "auto",
+            "test_requirements", "test_plan", "risk", "coverage_matrix", "testcases",
+        ],
+        help="auto=自动从第一个缺失产物的步骤续跑；testcases=复用方案/矩阵只重跑用例及之后",
     )
     p_run.set_defaults(func=cmd_run)
 

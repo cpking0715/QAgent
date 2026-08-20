@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import re
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
-from qagent.agent.llm import MockLLM
-from qagent.agent.runner import QAgentRunner
 from qagent.config import QAgentConfig, resolve_config
 from qagent.exporters import export_cases_xlsx
 from qagent.exporters.mindmap import write_requirements_drawio
@@ -25,6 +24,7 @@ from qagent.parsing import (
 from qagent.schema import load_schema
 from qagent.server.jobs import JobStore
 from qagent.server.scope import line_matches_query
+from qagent.validation import full_validate
 
 
 def _write_cases_and_xlsx(config: QAgentConfig, cases: list[dict]) -> None:
@@ -38,17 +38,12 @@ def _write_cases_and_xlsx(config: QAgentConfig, cases: list[dict]) -> None:
 
 def job_config(store: JobStore, job_id: str) -> QAgentConfig:
     base = resolve_config()
-    return QAgentConfig(
+    # replace 透传 base 的全部字段（含 prompt/llm 新配置），只重定向 job 目录
+    return replace(
+        base,
         workspace=store.job_dir(job_id),
         input_dir=store.input_dir(job_id),
         output_dir=store.output_dir(job_id),
-        language=base.language,
-        schema_path=base.schema_path,
-        templates_dir=base.templates_dir,
-        retry_limit=base.retry_limit,
-        strict_coverage=base.strict_coverage,
-        skill_root=base.skill_root,
-        llm=base.llm,
     )
 
 
@@ -160,18 +155,23 @@ def delete_cases(store: JobStore, job_id: str, ids: list[str]) -> str:
 
 def validate_and_export(store: JobStore, job_id: str, fill_gaps: bool = True) -> dict:
     config = job_config(store, job_id)
-    if fill_gaps and config.testcases_path.is_file() and config.coverage_matrix_path.is_file():
-        rows = parse_coverage_matrix(config.coverage_matrix_path)
+    warnings: list[str] = []
+    cases: list[dict] | None = None
+    rows = None
+    # 只解析一次，供补齐/渲染/导出共用（校验仍独立读盘验证真实产物）
+    if config.testcases_path.is_file() and config.coverage_matrix_path.is_file():
         cases = parse_cases(config.testcases_path)
-        req_items = parse_requirement_items(config.test_plan_path)
-        req_ids = {rid for rid, _ in req_items}
-        sc_to_req = {row.scenario_id: row.requirement_id for row in rows}
-        for case in cases:
-            normalize_case(case, req_ids, sc_to_req, req_items=req_items)
-        cases = fill_missing_cases(cases, rows)
-        for case in cases:
-            normalize_case(case, req_ids, sc_to_req, req_items=req_items)
-        _write_cases_and_xlsx(config, cases)
+        rows = parse_coverage_matrix(config.coverage_matrix_path)
+        if fill_gaps and config.test_plan_path.is_file():
+            req_items = parse_requirement_items(config.test_plan_path)
+            req_ids = {rid for rid, _ in req_items}
+            sc_to_req = {row.scenario_id: row.requirement_id for row in rows}
+            for case in cases:
+                normalize_case(case, req_ids, sc_to_req, req_items=req_items)
+            cases = fill_missing_cases(cases, rows)
+            for case in cases:
+                normalize_case(case, req_ids, sc_to_req, req_items=req_items)
+            _write_cases_and_xlsx(config, cases)
     if config.test_requirements_path.is_file():
         write_requirements_drawio(
             config.test_requirements_path,
@@ -183,15 +183,12 @@ def validate_and_export(store: JobStore, job_id: str, fill_gaps: bool = True) ->
             config.test_requirements_path,
             config.test_requirements_xmind_path,
         )
-    warnings: list[str] = []
-    if config.testcases_path.is_file() and config.coverage_matrix_path.is_file():
-        cases = parse_cases(config.testcases_path)
-        rows = parse_coverage_matrix(config.coverage_matrix_path)
+    if cases is not None and rows is not None:
         config.qa_review_path.write_text(
             render_qa_review_md(rows, cases), encoding="utf-8",
         )
-        runner = QAgentRunner(config, MockLLM({}))
-        errors, warnings = runner._full_validate()
+        outcome = full_validate(config)
+        errors, warnings = outcome.errors, outcome.warnings
         export_cases_xlsx(
             config.testcases_xlsx_path,
             load_schema(config.schema_path),
