@@ -31,6 +31,65 @@ class LLMConfig:
         return os.environ.get(self.api_key_env, "")
 
 
+def mask_api_key(key: str) -> str:
+    text = (key or "").strip()
+    if not text:
+        return ""
+    if len(text) <= 8:
+        return text[:2] + "••••"
+    return text[:3] + "••••" + text[-4:]
+
+
+def local_yaml_path(workspace: Path | None = None) -> Path:
+    return find_workspace_root(workspace) / "qagent.local.yaml"
+
+
+def public_llm_settings(workspace: Path | None = None) -> dict[str, Any]:
+    cfg = resolve_config(workspace=workspace)
+    key = cfg.llm.resolve_api_key()
+    source = ""
+    if cfg.llm.api_key:
+        source = "file"
+    elif key:
+        source = "env"
+    return {
+        "api_key_configured": bool(key),
+        "api_key_hint": mask_api_key(key),
+        "api_key_source": source,
+        "model": cfg.llm.model,
+        "base_url": cfg.llm.base_url,
+    }
+
+
+def update_local_llm(
+    *,
+    api_key: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+    workspace: Path | None = None,
+) -> dict[str, Any]:
+    """写入 qagent.local.yaml 的 llm 段，空字符串表示该项不改。"""
+    path = local_yaml_path(workspace)
+    data = _load_yaml(path)
+    llm = data.get("llm")
+    if not isinstance(llm, dict):
+        llm = {}
+    if api_key is not None and str(api_key).strip():
+        llm["api_key"] = str(api_key).strip()
+    if model is not None and str(model).strip():
+        llm["model"] = str(model).strip()
+    if base_url is not None and str(base_url).strip():
+        llm["base_url"] = str(base_url).strip().rstrip("/")
+    if not llm:
+        raise ValueError("没有可保存的 LLM 设置")
+    data["llm"] = llm
+    path.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return public_llm_settings(workspace or path.parent)
+
+
 @dataclass
 class QAgentConfig:
     workspace: Path
@@ -73,16 +132,12 @@ class QAgentConfig:
         return self.output_dir / "testcases.xlsx"
 
     @property
-    def test_plan_mindmap_md_path(self) -> Path:
-        return self.output_dir / "test-plan-mindmap.md"
+    def test_requirements_drawio_path(self) -> Path:
+        return self.output_dir / "test-requirements.drawio"
 
     @property
-    def test_plan_mindmap_mm_path(self) -> Path:
-        return self.output_dir / "test-plan.mm"
-
-    @property
-    def test_plan_mindmap_opml_path(self) -> Path:
-        return self.output_dir / "test-plan.opml"
+    def test_requirements_xmind_path(self) -> Path:
+        return self.output_dir / "test-requirements.xmind"
 
     @property
     def pipeline_state_path(self) -> Path:

@@ -23,7 +23,7 @@ from qagent.agent.prompts import (
 )
 from qagent.config import QAgentConfig
 from qagent.exporters import export_cases_xlsx
-from qagent.exporters.mindmap import write_test_plan_mindmaps
+from qagent.exporters.mindmap import write_requirements_drawio
 from qagent.parsing import (
     CoverageRow,
     merge_cases,
@@ -174,22 +174,25 @@ class QAgentRunner:
 
     def _export_mindmap(self) -> None:
         try:
-            write_test_plan_mindmaps(
-                plan_path=self.config.test_plan_path,
-                md_path=self.config.test_plan_mindmap_md_path,
-                mm_path=self.config.test_plan_mindmap_mm_path,
-                matrix_path=(
-                    self.config.coverage_matrix_path
-                    if self.config.coverage_matrix_path.is_file()
-                    else None
-                ),
-                risk_path=(
-                    self.config.risk_path if self.config.risk_path.is_file() else None
-                ),
-                opml_path=self.config.test_plan_mindmap_opml_path,
+            write_requirements_drawio(
+                self.config.test_requirements_path,
+                self.config.test_requirements_drawio_path,
             )
+            if self.config.test_requirements_drawio_path.is_file():
+                self._log(f"已写出 {self.config.test_requirements_drawio_path.name}")
         except (OSError, ValueError) as exc:
-            self._log(f"WARNING: 思维导图未生成: {exc}")
+            self._log(f"WARNING: test-requirements.drawio 未生成: {exc}")
+        try:
+            from qagent.exporters.mindmap import write_requirements_xmind
+
+            write_requirements_xmind(
+                self.config.test_requirements_path,
+                self.config.test_requirements_xmind_path,
+            )
+            if self.config.test_requirements_xmind_path.is_file():
+                self._log(f"已写出 {self.config.test_requirements_xmind_path.name}")
+        except (OSError, ValueError) as exc:
+            self._log(f"WARNING: test-requirements.xmind 未生成: {exc}")
 
     def _finalize_cases(
         self, cases: list[dict], matrix_rows: list[CoverageRow],
@@ -452,6 +455,7 @@ class QAgentRunner:
                 return result
             treq_content, plan_content, risk_content, matrix_content, matrix_rows = loaded
             self._log("续跑：复用已有测试需求/方案/风险/矩阵，从 Step 6 生成用例")
+            self._export_mindmap()
             result.steps_completed.extend(
                 ["test_requirements", "test_plan", "risk", "coverage_matrix"],
             )
@@ -474,6 +478,7 @@ class QAgentRunner:
             treq_content = extract_document(self.llm.complete(sys_prompt, user_prompt))
             self._log(f"Step 2/{total_steps} 完成，耗时 {time.perf_counter() - t0:.0f}s")
             self._write(self.config.test_requirements_path, treq_content)
+            self._export_mindmap()
             mark_step(self.config, PipelineStep.TEST_REQUIREMENTS, requirement_path)
             result.steps_completed.append("test_requirements")
 
@@ -486,7 +491,6 @@ class QAgentRunner:
             plan_content = extract_document(self.llm.complete(sys_prompt, user_prompt))
             self._log(f"Step 3/{total_steps} 完成，耗时 {time.perf_counter() - t0:.0f}s")
             self._write(self.config.test_plan_path, plan_content)
-            self._export_mindmap()
             mark_step(self.config, PipelineStep.TEST_PLAN, requirement_path)
             result.steps_completed.append("test_plan")
 
@@ -538,7 +542,6 @@ class QAgentRunner:
             self._log(f"Step 5/{total_steps} 完成，耗时 {time.perf_counter() - t0:.0f}s")
             mark_step(self.config, PipelineStep.COVERAGE_MATRIX)
             result.steps_completed.append("coverage_matrix")
-            self._export_mindmap()
             matrix_rows = parse_coverage_matrix(self.config.coverage_matrix_path)
 
         # Step 6: 测试用例（按矩阵行分批，避免超长输出截断）
@@ -624,10 +627,9 @@ class QAgentRunner:
         result.case_count = len(cases)
         result.artifacts = {
             "test_requirements": self.config.test_requirements_path,
+            "test_requirements_drawio": self.config.test_requirements_drawio_path,
+            "test_requirements_xmind": self.config.test_requirements_xmind_path,
             "test_plan": self.config.test_plan_path,
-            "test_plan_mindmap": self.config.test_plan_mindmap_md_path,
-            "test_plan_mm": self.config.test_plan_mindmap_mm_path,
-            "test_plan_opml": self.config.test_plan_mindmap_opml_path,
             "risk": self.config.risk_path,
             "coverage_matrix": self.config.coverage_matrix_path,
             "testcases": self.config.testcases_path,

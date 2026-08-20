@@ -246,25 +246,28 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("FAILED: Agent 流水线未完成")
         return 1
 
-    print(f"OK: Agent 完成，{result.case_count} 条用例")
-    for name, path in result.artifacts.items():
-        print(f"  {name}: {path}")
+    from qagent.deliverables import format_deliverables
+    print(format_deliverables(result.artifacts, result.case_count))
     return 0
 
 
 def cmd_mindmap(args: argparse.Namespace) -> int:
-    """把思维导图 Markdown / 嵌套列表转成 OPML，便于飞书导入。"""
-    from qagent.exporters.mindmap import markdown_to_opml, write_test_plan_mindmaps
+    """把测试需求或 Markdown 大纲转成 Draw.io。"""
+    from qagent.exporters.mindmap import (
+        markdown_to_drawio,
+        markdown_to_opml,
+        markdown_to_xmind,
+        write_requirements_drawio,
+        write_requirements_xmind,
+    )
 
     source = args.source
     if source is None:
         config = resolve_config(overrides={"output_dir": str(args.out_dir) if args.out_dir else None})
-        if config.test_plan_mindmap_md_path.is_file():
-            source = config.test_plan_mindmap_md_path
-        elif config.test_plan_path.is_file():
-            source = config.test_plan_path
+        if config.test_requirements_path.is_file():
+            source = config.test_requirements_path
         else:
-            print("ERROR: 请指定 Markdown 文件，或先生成 test-plan-mindmap.md")
+            print("ERROR: 请指定 Markdown 文件，或先生成 test-requirements.md")
             return 1
     source = source.resolve()
     if not source.is_file():
@@ -273,33 +276,45 @@ def cmd_mindmap(args: argparse.Namespace) -> int:
 
     out = args.out
     if out is None:
-        out = source.with_suffix(".opml")
+        out = source.with_name("test-requirements.drawio") if source.name == "test-requirements.md" else source.with_suffix(".drawio")
     out = out.resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
 
     text = source.read_text(encoding="utf-8")
-    if args.from_plan or "```requirements" in text:
-        md_path = out.with_name("test-plan-mindmap.md") if out.suffix.lower() == ".opml" else source
-        mm_path = out.with_suffix(".mm")
-        sibling = source.parent
-        matrix = sibling / "coverage-matrix.md"
-        risk = sibling / "risk.md"
+    structured = args.from_plan or source.name == "test-requirements.md" or "功能测试要点" in text
+    if structured:
+        req = source if source.name != "test-plan.md" else source.parent / "test-requirements.md"
+        if not req.is_file():
+            print(f"ERROR: 找不到测试需求: {req}")
+            return 1
+        drawio = out if out.suffix.lower() == ".drawio" else req.with_name("test-requirements.drawio")
         try:
-            write_test_plan_mindmaps(
-                plan_path=source,
-                md_path=md_path,
-                mm_path=mm_path,
-                matrix_path=matrix if matrix.is_file() else None,
-                risk_path=risk if risk.is_file() else None,
-                opml_path=out,
-            )
+            write_requirements_drawio(req, drawio)
         except (OSError, ValueError) as exc:
             print(f"ERROR: {exc}")
             return 1
-    else:
+        if out.suffix.lower() == ".opml":
+            out.write_text(markdown_to_opml(text), encoding="utf-8")
+        elif out.suffix.lower() == ".xmind":
+            if structured:
+                from qagent.exporters.mindmap import write_requirements_xmind
+
+                write_requirements_xmind(req, out)
+            else:
+                out.write_bytes(markdown_to_xmind(text))
+        else:
+            out = drawio
+    elif out.suffix.lower() == ".opml":
         out.write_text(markdown_to_opml(text), encoding="utf-8")
-    print(f"OK: 已写出 OPML → {out}")
-    print("飞书：新建思维导图 → 导入 → 选择该 .opml")
+    elif out.suffix.lower() == ".xmind":
+        out.write_bytes(markdown_to_xmind(text))
+    else:
+        out.write_text(markdown_to_drawio(text), encoding="utf-8")
+    print(f"OK: 已写出 → {out}")
+    if out.suffix.lower() == ".drawio":
+        print("用 diagrams.net 或 VS Code Draw.io 插件打开")
+    elif out.suffix.lower() == ".xmind":
+        print("用 XMind（2020 及以上）打开")
     return 0
 
 
@@ -414,11 +429,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_run.set_defaults(func=cmd_run)
 
-    p_mindmap = sub.add_parser("mindmap", help="将 Markdown 标题/嵌套列表转为 OPML（飞书导入）")
-    p_mindmap.add_argument("source", type=Path, nargs="?", help="test-plan-mindmap.md 或任意嵌套列表 Markdown")
-    p_mindmap.add_argument("-o", "--out", type=Path, help="输出 .opml 路径")
-    p_mindmap.add_argument("--out-dir", type=Path, help="未指定文件时，从该输出目录读取思维导图")
-    p_mindmap.add_argument("--from-plan", action="store_true", help="按 test-plan.md 重新生成导图再导出 OPML")
+    p_mindmap = sub.add_parser("mindmap", help="将 Markdown 转为 Draw.io")
+    p_mindmap.add_argument("source", type=Path, nargs="?", help="test-requirements.md 或任意嵌套列表 Markdown")
+    p_mindmap.add_argument("-o", "--out", type=Path, help="输出 .drawio 路径")
+    p_mindmap.add_argument("--out-dir", type=Path, help="未指定文件时，从该输出目录读取测试需求")
+    p_mindmap.add_argument("--from-plan", action="store_true", help="按 test-requirements.md 重新生成 Draw.io")
     p_mindmap.set_defaults(func=cmd_mindmap)
 
     p_serve = sub.add_parser("serve", help="启动多人任务服务（Web / API / 飞书回调）")

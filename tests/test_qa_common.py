@@ -7,7 +7,7 @@ import pytest
 from qagent.config import QAgentConfig, resolve_config
 from qagent.exporters import ExportContext, get_exporter
 from qagent.agent.runner import keep_one_case_per_row
-from qagent.exporters.mindmap import write_test_plan_mindmaps
+from qagent.exporters.mindmap import write_requirements_drawio
 from qagent.parsing import (
     CoverageRow,
     fill_missing_cases,
@@ -217,25 +217,13 @@ def test_sanitize_requirement_ref():
     assert sanitize_requirement_ref("R9", valid) == "R9"
 
 
-def test_mindmap_contains_requirements(tmp_path):
-    md = tmp_path / "test-plan-mindmap.md"
-    mm = tmp_path / "test-plan.mm"
-    write_test_plan_mindmaps(
-        plan_path=FIXTURES / "test-plan.md",
-        md_path=md,
-        mm_path=mm,
-        matrix_path=FIXTURES / "coverage-matrix.md",
-        risk_path=FIXTURES / "risk.md",
-    )
-    outline = md.read_text(encoding="utf-8")
-    freemind = mm.read_text(encoding="utf-8")
-    opml = mm.with_suffix(".opml").read_text(encoding="utf-8")
-    assert "R1" in outline
-    assert "SC-001" in outline
-    assert "<map" in freemind
-    assert "RK1" in freemind
-    assert "<opml" in opml
-    assert 'text="R1' in opml or "R1" in opml
+def test_requirements_drawio(tmp_path):
+    drawio = tmp_path / "test-requirements.drawio"
+    write_requirements_drawio(FIXTURES / "test-requirements-generated.md", drawio)
+    xml = drawio.read_text(encoding="utf-8")
+    assert "<mxfile" in xml
+    assert "F1" in xml or "注册" in xml
+    assert not (tmp_path / "test-plan.drawio").exists()
 
 
 def test_nested_markdown_list_to_opml():
@@ -252,6 +240,10 @@ def test_nested_markdown_list_to_opml():
     assert 'text="JPG"' in xml
     escaped = markdown_to_opml("- A & B\n")
     assert "A &amp; B" in escaped
+    from qagent.exporters.mindmap import markdown_to_drawio
+    drawio = markdown_to_drawio("# 方案\n\n- A & B\n")
+    assert "<mxfile" in drawio
+    assert "A &amp; B" in drawio
 
 
 def test_cli_mindmap_converts_nested_list(tmp_path):
@@ -264,6 +256,19 @@ def test_cli_mindmap_converts_nested_list(tmp_path):
     assert "<opml" in text
     assert 'text="根"' in text
     assert 'text="子"' in text
+    dest_io = tmp_path / "outline.drawio"
+    assert main(["mindmap", str(src), "-o", str(dest_io)]) == 0
+    assert "<mxfile" in dest_io.read_text(encoding="utf-8")
+    dest_xmind = tmp_path / "outline.xmind"
+    assert main(["mindmap", str(src), "-o", str(dest_xmind)]) == 0
+    import json
+    import zipfile
+
+    with zipfile.ZipFile(dest_xmind) as zf:
+        assert "content.json" in zf.namelist()
+        content = json.loads(zf.read("content.json"))
+    assert content[0]["rootTopic"]["title"] == "根"
+    assert content[0]["rootTopic"]["children"]["attached"][0]["title"] == "子"
 
 
 def test_valid_cases_pass(schema, requirement_ids):
@@ -339,6 +344,24 @@ def test_export_xlsx(schema, tmp_path):
     path = exporter.export(ExportContext(output_path=out, schema=schema, cases=cases))
     assert path.is_file()
     assert path.stat().st_size > 0
+
+
+def test_list_deliverables_explains_each_file():
+    from qagent.deliverables import format_deliverables, list_deliverables
+
+    rows = list_deliverables({
+        "xlsx": "testcases.xlsx",
+        "test_plan": "test-plan.md",
+        "test_requirements": "test-requirements.md",
+    })
+    assert [r["title"] for r in rows] == ["测试需求", "测试方案", "用例表格"]
+    assert rows[0]["role"] == "测什么、不测什么"
+    assert "覆盖依据" in rows[0]["content"]
+    text = format_deliverables({"test_plan": Path("out/test-plan.md")}, 3)
+    assert "3 条用例" in text
+    assert "作用：怎么测" in text
+    assert "内容：" in text
+    assert "test-plan.md" in text
 
 
 def test_resolve_config_uses_repo_schema():

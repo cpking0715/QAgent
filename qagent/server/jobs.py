@@ -22,10 +22,9 @@ RESUME_FROM_MATRIX = (
 )
 ARTIFACT_NAMES = {
     "test-requirements.md": "test_requirements",
+    "test-requirements.drawio": "test_requirements_drawio",
+    "test-requirements.xmind": "test_requirements_xmind",
     "test-plan.md": "test_plan",
-    "test-plan-mindmap.md": "test_plan_mindmap",
-    "test-plan.mm": "test_plan_mm",
-    "test-plan.opml": "test_plan_opml",
     "risk.md": "risk",
     "coverage-matrix.md": "coverage_matrix",
     "testcases.md": "testcases",
