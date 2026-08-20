@@ -1,0 +1,28 @@
+# QAgent 数值规则（唯一事实来源）
+# qagent/agent/prompts.py、qagent/server/chat.py 与 skills 的 SKILL.md 生成段落
+# 均从本文件渲染；调整标准只需改这里，无需同步多处代码。
+# 运行 `python -m qagent.skills_gen` 可将变更同步进 SKILL.md 的生成块。
+#
+# 原则：用例数量由需求覆盖决定（矩阵每行、每个 R、每条边界定义），
+#       数量区间只是"明显偏离时的自查参考"，不是硬性上限。
+version: 1
+
+coverage:
+  # 覆盖硬规则（用例数量真正的决定因素），渲染进 prompt 与 SKILL.md
+  phrase: "矩阵每行 ≥1 条、每个 R ≥1 条正向、有边界定义的 R 必出边界/异常用例"
+
+case_count:
+  # 参考区间（软信号）：明显偏离时自查漏测/冗余，禁止为凑数增删用例
+  simple: [15, 40]
+  complex: [30, 80]
+  complex_when: "复杂系统（需求条目 ≥15 或多 PDF）"
+  trim_order: "需要精简时优先砍 LOW 风险对应的 P2 用例"
+
+test_requirements:
+  # 测试需求第 3~5 节清单行数参考
+  checklist_rows_simple: 8
+  checklist_rows_complex: 25
+
+chat:
+  # 对话修订单次 upsert 的用例上限
+  max_cases_per_action: 8

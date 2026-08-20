@@ -1,11 +1,15 @@
-"""Agent 提示词构建。"""
+"""Agent 提示词构建。数值规则统一来自 templates/rules.yaml（qagent/rules.py），
+枚举契约来自 templates/testcase.schema.yaml，本文件不再手写这些数值。"""
 
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from pathlib import Path
 
 from qagent.config import QAgentConfig
+from qagent.parsing import filter_requirements_block
+from qagent.rules import load_rules
 from qagent.schema import TestcaseSchema, load_schema
 
 SYSTEM = """你是 QAgent，资深 QA 测试设计专家 Agent。
@@ -39,7 +43,9 @@ def extract_document(text: str) -> str:
     return text
 
 
+@lru_cache(maxsize=64)
 def _read(path: Path) -> str:
+    # 模板文件运行期不变，缓存避免批次循环内反复读盘
     return path.read_text(encoding="utf-8")
 
 
@@ -92,6 +98,7 @@ def build_test_requirements_prompt(
 ) -> tuple[str, str]:
     template = _read(config.templates_dir / "test-requirements-output.md")
     supplement = _user_supplement_hint(source_text)
+    rules = load_rules(config.rules_path)
     user = f"""请根据 PRD 与研发设计文档，生成完整的 test-requirements.md（详细测试需求，用于驱动后续 test-plan 与用例，目标是**尽量不漏测**）。
 
 源文档：{source_path.name}
@@ -107,7 +114,7 @@ def build_test_requirements_prompt(
 {template}
 
 硬性要求：
-1. 第 3~5 节表格行数：简单功能 ≥8 行，复杂系统（OCR/多 API）≥25 行
+1. {rules.checklist_rule()}
 2. 第 4 节 API 清单必须来自设计文档，不得编造 Path
 3. 第 8 节覆盖矩阵每个必测模块至少一行
 4. 第 9 节 PRE 条目应覆盖 PRD 所有业务规则
@@ -195,9 +202,9 @@ TESTCASE_QUALITY_GUIDE = """
    - API 清单中每个 endpoint 至少：1 成功 + 1 典型失败（参数/权限）
    - 识别/路由/模板类：覆盖规则表中的关键组合，非只测 happy path
 
-5. **模块与 ID**
+5. **模块与数量**
    - 按功能模块分组；ID 格式 TC-<模块缩写>-<序号>，模块如 OCR/UP/TMPL/API/EXP
-   - 复杂系统（需求条目 ≥15 或 多 PDF）：**30~80 条**；简单功能 15~40 条
+   - {case_count_rule}
 
 6. **preconditions**
    - 写清登录态、权限、前置数据、服务 Mock 状态；无则 `[]`
@@ -207,12 +214,52 @@ TESTCASE_QUALITY_GUIDE = """
 """
 
 
+def _quality_guide(config: QAgentConfig) -> str:
+    """数量规则从 templates/rules.yaml 渲染（唯一事实来源）。"""
+    rules = load_rules(config.rules_path)
+    return TESTCASE_QUALITY_GUIDE.replace("{case_count_rule}", rules.case_count_rule())
+
+
+def _bounded(text: str, budget: int) -> str:
+    text = text or ""
+    if len(text) <= budget:
+        return text
+    return text[:budget] + "\n…（已按预算截断，完整内容见产物文件）"
+
+
+def _batch_context(
+    config: QAgentConfig,
+    treq: str,
+    plan: str,
+    risk: str,
+    requirement_ids: list[str] | None = None,
+) -> tuple[str, str, str]:
+    """批次 prompt 上下文裁剪。
+
+    full（默认，与历史行为一致）：携带上游产物全文；
+    sliced：plan 的 requirements 块只保留本批 R，三份文档按字符预算截断，
+            降低批次数带来的 token 线性放大。
+    """
+    if config.prompt_context_mode != "sliced":
+        return treq, plan, risk
+    if requirement_ids:
+        plan = filter_requirements_block(plan, requirement_ids)
+    return (
+        _bounded(treq, config.prompt_treq_budget),
+        _bounded(plan, config.prompt_plan_budget),
+        _bounded(risk, config.prompt_risk_budget),
+    )
+
+
 def build_risk_prompt(
     test_requirements_text: str,
     test_plan_text: str,
     config: QAgentConfig,
 ) -> tuple[str, str]:
     template = _read(config.templates_dir / "risk.md")
+    high_min = int(
+        load_schema(config.schema_path).risk_zones.get("HIGH", {}).get("min_score", 10)
+    )
     user = f"""请生成完整的 risk.md。
 
 --- test-requirements.md ---
@@ -224,7 +271,7 @@ def build_risk_prompt(
 模板：
 {template}
 
-分析要求：风险关联 R 编号；≥10 分需失效模式分析。
+分析要求：风险关联 R 编号；≥{high_min} 分需失效模式分析。
 表格列名：编号 | 风险描述 | 影响度 | 可能性 | 风险分 | 分区 | 关联需求 | 对应用例优先级
 """
     return SYSTEM, user
@@ -245,6 +292,9 @@ def build_coverage_matrix_prompt(
             f"\n本批只覆盖这些需求（每个至少 1 行）：{listed}\n"
             "不要写这些 R 以外的行。场景ID 可从 SC-001 起，脚本会重编号。\n"
         )
+    treq_sliced, plan_sliced, risk_sliced = _batch_context(
+        config, test_requirements_text, test_plan_text, risk_text, requirement_ids,
+    )
     user = f"""请生成完整的 coverage-matrix.md（覆盖契约，先于用例）。
 {batch_hint}
 类别仅允许：Happy / Boundary / Negative / Security / State / Concurrency。
@@ -252,13 +302,13 @@ def build_coverage_matrix_prompt(
 不要编造 Accessibility。不要输出用例 YAML。
 
 --- test-requirements.md ---
-{test_requirements_text}
+{treq_sliced}
 
 --- test-plan.md ---
-{test_plan_text}
+{plan_sliced}
 
 --- risk.md ---
-{risk_text}
+{risk_sliced}
 
 模板：
 {template}
@@ -333,25 +383,29 @@ def build_testcases_prompt(
     risk_text: str,
     coverage_matrix_text: str,
     config: QAgentConfig,
+    requirement_ids: list[str] | None = None,
 ) -> tuple[str, str]:
     schema = load_schema(config.schema_path)
     example = _read(config.templates_dir / "testcase.example.yaml")
+    treq_sliced, plan_sliced, risk_sliced = _batch_context(
+        config, test_requirements_text, test_plan_text, risk_text, requirement_ids,
+    )
 
     user = f"""请生成完整的 testcases.md。
 
 【覆盖依据优先级】coverage-matrix.md > test-requirements.md 清单 > test-plan R 条目 > risk.md。
 测试需求第 3~5 节每个要点至少 1 条用例；第 4 节每个 API 至少成功+失败各 1 条。
 
-{TESTCASE_QUALITY_GUIDE}
+{_quality_guide(config)}
 
 --- test-requirements.md ---
-{test_requirements_text}
+{treq_sliced}
 
 --- test-plan.md ---
-{test_plan_text}
+{plan_sliced}
 
 --- risk.md ---
-{risk_text}
+{risk_sliced}
 
 --- coverage-matrix.md ---
 {coverage_matrix_text}
@@ -392,7 +446,7 @@ def build_fix_prompt(
         extra += f"\n--- qa-review.md ---\n{review_text}\n"
     user = f"""testcases.md 校验失败，请修正后输出**完整** testcases.md。
 
-{TESTCASE_QUALITY_GUIDE}
+{_quality_guide(config)}
 {treq_block}{extra}
 --- 当前 testcases.md ---
 {testcases_text}

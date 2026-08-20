@@ -212,7 +212,10 @@ CATEGORY_TO_METHOD = {
     "Concurrency": "场景法",
 }
 ID_PATTERN = re.compile(r"^TC-[A-Z0-9]{2,8}-\d{3}$")
-_SC_IN_TEXT = re.compile(r"SC-\d{3}")
+# SC 编号唯一正则：文本中查找用 findall，整串校验用 fullmatch
+SC_ID_RE = re.compile(r"SC-\d{3}")
+_SC_IN_TEXT = SC_ID_RE
+_KEEP_RID_RE = re.compile(r"^\s*(R[\w-]*)\s*:")
 _STEP_SPLIT = re.compile(r"(?:^|[\s。；;])\d+[\.、\)]\s*")
 
 
@@ -469,10 +472,13 @@ def merge_cases(existing: list[dict], incoming: list[dict]) -> list[dict]:
     return list(merged.values()) + extras
 
 
+_REQ_BLOCK_RE = re.compile(r"```requirements\s*\n(.*?)\n```", re.DOTALL)
+
+
 def parse_requirement_items(plan_path: Path) -> list[tuple[str, str]]:
     """解析 requirements 块为 (id, 描述) 列表，保序。"""
     text = plan_path.read_text(encoding="utf-8")
-    match = re.search(r"```requirements\s*\n(.*?)\n```", text, re.DOTALL)
+    match = _REQ_BLOCK_RE.search(text)
     if not match:
         raise ValueError("test-plan.md 缺少 ```requirements 代码块")
     items: list[tuple[str, str]] = []
@@ -487,6 +493,20 @@ def parse_requirement_items(plan_path: Path) -> list[tuple[str, str]]:
     if not items:
         raise ValueError("requirements 代码块为空")
     return items
+
+
+def filter_requirements_block(plan_text: str, keep_ids) -> str:
+    """只保留 keep_ids 对应的 R 条目，块外内容原样保留（批次 prompt 切片用）。"""
+    keep = set(keep_ids)
+    match = _REQ_BLOCK_RE.search(plan_text)
+    if not match or not keep:
+        return plan_text
+    lines = [
+        line for line in match.group(1).splitlines()
+        if not _KEEP_RID_RE.match(line) or _KEEP_RID_RE.match(line).group(1) in keep
+    ]
+    block = "```requirements\n" + "\n".join(lines) + "\n```"
+    return plan_text[:match.start()] + block + plan_text[match.end():]
 
 
 MATRIX_CATEGORIES = {"Happy", "Boundary", "Negative", "Security", "State", "Concurrency"}

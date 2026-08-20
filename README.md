@@ -181,7 +181,29 @@ llm:
   base_url: https://api.openai.com/v1   # 兼容网关改这里
   temperature: 0.2
   max_tokens: 8192
+  timeout: 600            # 单次请求超时（秒）
+  retries: 3              # 429/5xx/网络错误的重试次数（指数退避）
+  backoff_seconds: 1.0    # 退避基数：1s/2s/4s
 ```
+
+全局并发上限用环境变量 `QAGENT_MAX_CONCURRENT_LLM` 控制（默认 16），覆盖"多任务 × 多批次"的嵌套并发。
+
+长任务想支持**秒级终止**：在 `qagent.local.yaml` 里设 `llm.stream: true`（默认关闭）。开启后 LLM 流式输出，终止请求会在输出 chunk 之间生效，不再等待整次调用结束（最长 600s）。
+
+Web 界面使用 SSE 推送任务进度与日志（不再 600ms 轮询）；服务重启后，中断的任务会被标记为 failed 并提示可续跑（`from=auto` 从第一个缺失产物的步骤继续）。
+
+### 调整生成标准（rules.yaml，摸索期常用）
+
+所有数值规则（用例数量参考区间、清单行数、对话单次用例上限等）统一在 `templates/rules.yaml` 一处维护，prompt 与 Skill 文档都从这里渲染，改完即全局生效。原则：**用例数量由需求覆盖决定（矩阵每行、每个 R、每条边界定义），数量区间只是明显偏离时的自查参考**，不是硬性上限。
+
+改完 `rules.yaml` 后运行一次，把 SKILL.md 的生成块同步更新：
+
+```bash
+python -m qagent.skills_gen            # 就地更新
+python -m qagent.skills_gen --check    # CI 校验是否同步
+```
+
+长需求想省 token：在 `qagent.yaml` 里设 `prompt_context_mode: sliced`，批次 prompt 会按预算截断上下文、只携带本批 R 条目（默认 `full` 携带全文，行为与历史一致；预算可用 `prompt_treq_budget` / `prompt_plan_budget` / `prompt_risk_budget` 微调）。
 
 `qagent.local.yaml` 已在 `.gitignore` 中。
 
@@ -204,6 +226,18 @@ export OPENAI_API_KEY=sk-你的key
 ---
 
 ## 5. 使用方式
+
+### 分阶段确认工作流（默认）
+
+按日常评审节奏分三段生成，每段产物可**在线修改**后再继续：
+
+1. **测试需求**（测什么/不测什么）：上传文档 → 确认范围 → 自动生成本段即停；点产物抽屉的「编辑」可直接修改 Markdown（需求导图随编辑同步更新），或对话让我调整；
+2. **测试方案 + 风险 + 覆盖矩阵**：点「确认无误，继续下一阶段」，以上一段（含你的修改）为输入；
+3. **测试用例 + QA Review + xlsx**：再次确认后生成，之后仍可对话补充修订。
+
+每段产物也可下载离线修改后继续；后端等价于 `POST /api/jobs/{id}/run {"from": "test_plan", "stop_after": "coverage_matrix"}`，
+CLI 等价于分段执行 `qagent run 需求.md --from auto`（自动从第一个缺失产物的步骤续跑）。
+更多菜单里的「重新生成」为全程一键（会覆盖已有方案与用例）。
 
 输入支持：`.md` `.txt` `.markdown` `.pdf` `.docx`。建议额外提供 **测试需求**（测什么、不测什么），质量会明显高于只丢 PRD。
 
