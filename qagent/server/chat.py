@@ -8,8 +8,9 @@ from typing import Any
 
 from qagent.agent.llm import LLMClient
 from qagent.agent.prompts import extract_document
-from qagent.parsing import parse_requirement_items
+from qagent.parsing import parse_cases, parse_requirement_items
 from qagent.server.jobs import JobStore
+from qagent.server.scope import artifact_has_perf, write_user_scope
 from qagent.server.tools import (
     delete_cases,
     patch_plan,
@@ -71,7 +72,7 @@ def apply_actions(
     job_id: str,
     actions: list[dict[str, Any]],
 ) -> tuple[list[str], dict | None, str | None]:
-    """执行动作。返回 (notes, validate_result, rerun_from)。校验失败抛错前由调用方回滚。"""
+    """执行动作。返回 (notes, validate_result, rerun_from)。校验失败不抛错，由 run_chat 决定保留或剔除。"""
     notes: list[str] = []
     last_validate: dict | None = None
     rerun_from: str | None = None
@@ -99,8 +100,12 @@ def apply_actions(
                 fill_gaps=bool(action.get("fill_gaps", True)),
             )
             if not last_validate.get("ok"):
-                raise ValueError("校验失败: " + "; ".join(last_validate.get("errors") or []))
-            notes.append("校验通过并已更新 Review / xlsx / 思维导图")
+                notes.append(
+                    "校验未通过，已保留本次写入："
+                    + "; ".join((last_validate.get("errors") or [])[:5])
+                )
+            else:
+                notes.append("校验通过并已更新 Review / xlsx / 思维导图")
         elif op == "rerun":
             step = str(action.get("from_step") or "testcases")
             if step not in {"requirements", "testcases"}:
@@ -128,8 +133,33 @@ def _job_chat_context(store: JobStore, job_id: str) -> str:
     if cases_path.is_file():
         text = cases_path.read_text(encoding="utf-8")
         n = text.count("```yaml")
-        chunks.append(f"已有用例约 {n} 条；正文是否含「性能」：{'是' if '性能' in text else '否'}")
+        chunks.append(
+            f"已有用例约 {n} 条；正文是否含性能/耗时/SLA：{'是' if artifact_has_perf(text) else '否'}"
+        )
     return "\n".join(chunks) or "尚无产物"
+
+
+def _case_ids(store: JobStore, job_id: str) -> set[str]:
+    path = store.output_dir(job_id) / "testcases.md"
+    if not path.is_file():
+        return set()
+    try:
+        return {str(case.get("id")) for case in parse_cases(path) if case.get("id")}
+    except ValueError:
+        return set()
+
+
+def _drop_bad_new_cases(
+    store: JobStore,
+    job_id: str,
+    existing_ids: set[str],
+    errors: list[str],
+) -> list[str]:
+    new_ids = _case_ids(store, job_id) - existing_ids
+    bad = [cid for cid in sorted(new_ids) if any(cid in err for err in errors)]
+    if bad:
+        delete_cases(store, job_id, bad)
+    return bad
 
 
 def run_chat(
@@ -144,12 +174,24 @@ def run_chat(
         store.append_chat(job_id, "user", message)
     elif history and history[-1].get("role") == "user" and history[-1].get("content") == message:
         history = history[:-1]
+
+    meta = store.load(job_id)
+    if meta.awaiting_scope:
+        write_user_scope(store, job_id, message)
+        meta = store.load(job_id)
+        meta.awaiting_scope = False
+        store.save_meta(meta)
+        reply = "范围已记下，开始生成测试方案和用例。"
+        store.append_chat(job_id, "assistant", reply)
+        return {"ok": True, "reply": reply, "notes": [], "rerun": "requirements"}
+
     user = (
         f"{_job_chat_context(store, job_id)}\n"
         f"最近对话：{json.dumps(history, ensure_ascii=False)}\n"
         f"用户：{message}"
     )
     parsed = _parse_actions(llm.complete(SYSTEM, user))
+    existing_ids = _case_ids(store, job_id)
     snapshot_output(store, job_id)
     try:
         notes, validated, rerun_from = apply_actions(store, job_id, parsed["actions"])
@@ -163,12 +205,24 @@ def run_chat(
             "notes": [],
             "rerun": None,
         }
+    if validated and not validated.get("ok"):
+        errors = list(validated.get("errors") or [])
+        bad = _drop_bad_new_cases(store, job_id, existing_ids, errors)
+        new_left = _case_ids(store, job_id) - existing_ids
+        if bad:
+            notes.append(f"已剔除未通过校验的用例 {bad}")
+        if not new_left and not bad:
+            restore_snapshot(store, job_id)
+            err = "修订未生效（已回滚）：" + "; ".join(errors[:5])
+            store.append_chat(job_id, "assistant", err)
+            return {"ok": False, "reply": err, "notes": notes, "rerun": None}
     reply = parsed.get("reply") or "已按你的要求处理。"
     if notes:
         reply = reply + "\n" + "\n".join(f"- {n}" for n in notes if len(n) < 200)
     store.append_chat(job_id, "assistant", reply)
+    ok = not (validated and not validated.get("ok"))
     return {
-        "ok": True,
+        "ok": ok,
         "reply": reply,
         "notes": notes,
         "rerun": rerun_from,

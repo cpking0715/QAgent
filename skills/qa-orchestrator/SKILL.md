@@ -9,7 +9,7 @@ description: >-
 
 # QA Orchestrator（测试生成流水线）
 
-固定流水线入口。**严格按顺序执行以下步骤，不跳步、不改序、不做条件分支路由。**
+固定流水线入口。**Step 1–9 严格按顺序执行，不跳步、不改序。** 仅生成前的 Step 0.5（范围澄清）允许对话。
 
 ## 路径解析（优先顺序）
 
@@ -27,13 +27,14 @@ description: >-
 
 - **Web 上传（推荐）**：`qagent serve` → 浏览器上传 PRD/需求文档 → 点击生成
 - **命令行上传目录**：文档放入 `input/uploads/` → `qagent run --uploads`
-- **Cursor Skill**：`/qa generate`（用户可在对话中 @ 附件文档）
+- **Cursor Skill**：`/qa generate`（用户可在对话中 @ 附件文档；范围不清时先确认再生成）
 - 自然语言："根据这些需求文档生成测试方案和用例"
 
 ## 流水线步骤
 
 ```
 Task Progress:
+- [ ] Step 0.5: 范围不清时先对话确认，写入 input/测试需求.md（可跳过）
 - [ ] Step 0: qagent generate <需求文件> --out <输出目录>（初始化流水线状态）
 - [ ] Step 1: 解析需求（PRD + 设计文档合并摄入）
 - [ ] Step 2: 生成 {output_dir}/test-requirements.md（详细测试需求，穷举可测点）
@@ -45,6 +46,19 @@ Task Progress:
 - [ ] Step 8: 运行校验，失败则修正重试
 - [ ] Step 9: 导出 {output_dir}/testcases.xlsx
 ```
+
+### Step 0.5：范围澄清（仅 Cursor 对话，生成前）
+
+**跳过（有一条即可进入 Step 0）：** 工作区或附件已有 `测试需求.md` / `test-requirements.md`；或用户说「全量 / 直接生成 / 按 PRD 全覆盖」。
+
+**否则禁止立刻 `qagent run`。** 先读 PRD/设计，按 `templates/test-requirements.example.md` **一次**给出范围草稿：
+
+- 必测模块 / 不测项
+- 功能、接口、边界、异常是否都要；安全、性能、兼容是否要
+- 环境与数据是否已知
+- 期望规模（少而精 / 常规 / 尽量全）
+
+用户改完、回复「可以」或「先按你的草稿跑」后，把定稿写成 `input/测试需求.md`，再执行 Step 0。Step 1–9 仍禁止跳步。
 
 ### Step 0：初始化
 
@@ -73,7 +87,8 @@ qagent generate <需求文件> --out <输出目录>
 ### Step 2：生成测试需求
 
 从 PRD + 设计文档生成 `{output_dir}/test-requirements.md`（**不是** test-plan，**不是**用例）。
-必须包含：功能/API/边界/异常/非功能清单、第 8 节覆盖矩阵（模块 × 测试类型总览，**不是** Step 5 的 `coverage-matrix.md`）、PRE 追溯预备条目。目标是尽量不漏测。
+必须包含：功能/API/边界/异常/非功能清单、第 8 节覆盖矩阵（模块 × 测试类型总览，**不是** Step 5 的 `coverage-matrix.md`）、PRE 追溯预备条目。
+若存在用户 `测试需求.md`：**必测/不测/测试类型以用户为准**，不要把用户排除的类型（如性能）再穷举进去。无用户范围文件时才尽量不漏测。
 
 模板：`templates/test-requirements-output.md`
 
@@ -137,6 +152,7 @@ qagent pipeline validate-export --out output
 
 - 跳过 test-requirements / test-plan / risk 直接写用例
 - 跳过覆盖矩阵直接写用例
+- 范围未确认就 `qagent run`（除非用户已给测试需求或明确说全量）
 - 自行改变流水线顺序或合并步骤
 - 校验未通过就导出 xlsx
 - 输出英文产物（除非需求文档本身为英文）

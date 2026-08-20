@@ -151,6 +151,12 @@ def create_handler(service: QAgentService):
                 except (FileNotFoundError, RuntimeError, ValueError) as exc:
                     _json(self, 400, {"error": str(exc)})
                 return
+            if len(parts) == 5 and parts[1:3] == ["api", "jobs"] and parts[4] == "cancel":
+                try:
+                    _json(self, 200, service.cancel_job(parts[3]))
+                except (FileNotFoundError, RuntimeError, ValueError) as exc:
+                    _json(self, 400, {"error": str(exc)})
+                return
             if len(parts) == 5 and parts[1:3] == ["api", "jobs"] and parts[4] == "chat":
                 try:
                     body = _read_json(self)

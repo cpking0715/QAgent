@@ -105,8 +105,15 @@ def handle_feishu_event(
         data = download_message_file(message_id, file_key)
         job = service.create_job(user_id, [(file_name, data)], title=file_name)
         service.store.bind_feishu(job["id"], chat_id, user_id)
-        service.start_run(job["id"], "requirements")
-        reply_text(chat_id, f"已创建任务 {job['id']}，正在生成测试方案和用例。")
+        if job.get("awaiting_scope"):
+            draft = ""
+            chat = job.get("chat") or []
+            if chat:
+                draft = str(chat[-1].get("content") or "")
+            reply_text(chat_id, f"已创建任务 {job['id']}。\n{draft}")
+        else:
+            service.start_run(job["id"], "requirements")
+            reply_text(chat_id, f"已创建任务 {job['id']}，正在按你提供的测试需求生成。")
         return {"ok": True, "job_id": job["id"]}
 
     text = str(content.get("text") or "").strip()

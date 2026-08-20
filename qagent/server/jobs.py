@@ -8,12 +8,18 @@ import re
 import shutil
 import threading
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-STATUSES = ("uploaded", "running", "ready", "revising", "failed")
+STATUSES = ("uploaded", "running", "ready", "revising", "failed", "cancelled")
+RESUME_FROM_MATRIX = (
+    "test-requirements.md",
+    "test-plan.md",
+    "risk.md",
+    "coverage-matrix.md",
+)
 ARTIFACT_NAMES = {
     "test-requirements.md": "test_requirements",
     "test-plan.md": "test_plan",
@@ -48,6 +54,9 @@ class JobMeta:
     title: str = ""
     feishu_chat_id: str | None = None
     feishu_user_id: str | None = None
+    cancel_requested: bool = False
+    current_step: str = ""
+    awaiting_scope: bool = False
 
     def to_public(self) -> dict[str, Any]:
         data = asdict(self)
@@ -115,7 +124,8 @@ class JobStore:
         if not path.is_file():
             raise FileNotFoundError(f"任务不存在: {job_id}")
         data = json.loads(path.read_text(encoding="utf-8"))
-        return JobMeta(**data)
+        allowed = {item.name for item in fields(JobMeta)}
+        return JobMeta(**{key: value for key, value in data.items() if key in allowed})
 
     def delete(self, job_id: str) -> None:
         meta = self.load(job_id)
@@ -146,7 +156,8 @@ class JobStore:
         for path in sorted(self.root.glob("*/meta.json"), reverse=True):
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
-                meta = JobMeta(**data)
+                allowed = {item.name for item in fields(JobMeta)}
+                meta = JobMeta(**{key: value for key, value in data.items() if key in allowed})
             except (OSError, TypeError, json.JSONDecodeError):
                 continue
             if owner and meta.owner != owner:
@@ -231,6 +242,10 @@ class JobStore:
         except json.JSONDecodeError:
             return None
         return mapping.get(chat_id)
+
+    def can_resume_from_matrix(self, job_id: str) -> bool:
+        out = self.output_dir(job_id)
+        return all((out / name).is_file() for name in RESUME_FROM_MATRIX)
 
 
 def default_jobs_root() -> Path:

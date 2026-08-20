@@ -27,7 +27,7 @@ export QAGENT_TOKEN=内网口令
 qagent serve --host 0.0.0.0 --port 8765 --no-browser
 ```
 
-浏览器打开服务地址：上传文档、整跑或只跑矩阵后、下载产物，并在右侧对话里局部修改方案/用例。飞书事件订阅 `POST /api/feishu/event`。部署见 `deploy/README.md`。
+浏览器打开服务地址：上传文档后先确认测试范围，再整跑或只跑矩阵后；生成中可终止；失败/已终止也可下载已有产物。飞书同一会话再发文件会新建任务。事件订阅 `POST /api/feishu/event`。部署见 `deploy/README.md`。
 
 ### 嵌入 Cursor（Skill 模式）
 
@@ -71,8 +71,8 @@ llm:
 | 模式 | 适用场景 |
 |------|---------|
 | `qagent run` | CI、命令行、无 IDE |
-| `qagent serve` | 内网 Web / API / 飞书 |
-| Cursor Skill | 对话式、人工介入 |
+| `qagent serve` | 内网 Web / API / 飞书（生成前确认范围，可终止） |
+| Cursor Skill | 对话式、可先澄清范围 |
 | `qagent check` | 仅校验已有产物 |
 
 Skill 负责「人在回路」；独立 Agent 负责「一键全自动」。

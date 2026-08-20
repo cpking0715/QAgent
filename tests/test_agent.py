@@ -34,6 +34,17 @@ def test_extract_document_strips_fence():
     assert extract_document(raw) == "# Title\n\nbody"
 
 
+def test_user_scope_prompt_prefers_user_range():
+    from qagent.agent.prompts import build_test_requirements_prompt
+    from qagent.config import resolve_config
+
+    config = resolve_config()
+    source = "# 合并\n\n## 测试需求\n不测：性能测试\n"
+    _, user = build_test_requirements_prompt(source, Path("req.md"), config)
+    assert "用户测试范围优先" in user
+    assert "不得写入" in user
+
+
 def test_agent_run_mock(tmp_path, mock_responses):
     out = tmp_path / "output"
     config = QAgentConfig(

@@ -9,7 +9,7 @@ from pathlib import Path
 from qagent.agent.llm import MockLLM
 from qagent.agent.runner import QAgentRunner
 from qagent.config import QAgentConfig, resolve_config
-from qagent.exporters import ExportContext, get_exporter
+from qagent.exporters import export_cases_xlsx
 from qagent.exporters.mindmap import write_test_plan_mindmaps
 from qagent.parsing import (
     fill_missing_cases,
@@ -22,7 +22,18 @@ from qagent.parsing import (
     render_qa_review_md,
     render_testcases_md,
 )
+from qagent.schema import load_schema
 from qagent.server.jobs import JobStore
+from qagent.server.scope import line_matches_query
+
+
+def _write_cases_and_xlsx(config: QAgentConfig, cases: list[dict]) -> None:
+    config.testcases_path.write_text(render_testcases_md(cases), encoding="utf-8")
+    export_cases_xlsx(
+        config.testcases_xlsx_path,
+        load_schema(config.schema_path),
+        cases,
+    )
 
 
 def job_config(store: JobStore, job_id: str) -> QAgentConfig:
@@ -60,7 +71,7 @@ def read_artifact(store: JobStore, job_id: str, name: str, query: str = "") -> s
     if query:
         hits = [
             line for line in text.splitlines()
-            if query.lower() in line.lower()
+            if line_matches_query(line, query)
         ]
         if not hits:
             return f"{filename} 中未找到 {query!r}"
@@ -133,7 +144,7 @@ def upsert_cases(store: JobStore, job_id: str, incoming: list[dict]) -> str:
         for case in incoming
     ]
     merged = merge_cases(existing, cleaned)
-    config.testcases_path.write_text(render_testcases_md(merged), encoding="utf-8")
+    _write_cases_and_xlsx(config, merged)
     return f"用例已合并，当前 {len(merged)} 条"
 
 
@@ -143,7 +154,7 @@ def delete_cases(store: JobStore, job_id: str, ids: list[str]) -> str:
         raise FileNotFoundError("还没有 testcases.md")
     drop = {str(i) for i in ids}
     cases = [c for c in parse_cases(config.testcases_path) if str(c.get("id")) not in drop]
-    config.testcases_path.write_text(render_testcases_md(cases), encoding="utf-8")
+    _write_cases_and_xlsx(config, cases)
     return f"已删除 {sorted(drop)}，剩余 {len(cases)} 条"
 
 
@@ -160,7 +171,7 @@ def validate_and_export(store: JobStore, job_id: str, fill_gaps: bool = True) ->
         cases = fill_missing_cases(cases, rows)
         for case in cases:
             normalize_case(case, req_ids, sc_to_req, req_items=req_items)
-        config.testcases_path.write_text(render_testcases_md(cases), encoding="utf-8")
+        _write_cases_and_xlsx(config, cases)
     if config.test_plan_path.is_file():
         write_test_plan_mindmaps(
             plan_path=config.test_plan_path,
@@ -179,14 +190,14 @@ def validate_and_export(store: JobStore, job_id: str, fill_gaps: bool = True) ->
         )
         runner = QAgentRunner(config, MockLLM({}))
         errors, warnings = runner._full_validate()
+        export_cases_xlsx(
+            config.testcases_xlsx_path,
+            load_schema(config.schema_path),
+            cases,
+        )
         if errors:
+            store.refresh_artifacts(job_id)
             return {"ok": False, "errors": errors, "warnings": warnings}
-        from qagent.schema import load_schema
-        get_exporter("xlsx").export(ExportContext(
-            output_path=config.testcases_xlsx_path,
-            schema=load_schema(config.schema_path),
-            cases=cases,
-        ))
     store.refresh_artifacts(job_id)
     return {"ok": True, "errors": [], "warnings": warnings}
 

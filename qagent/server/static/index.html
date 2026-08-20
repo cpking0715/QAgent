@@ -196,7 +196,7 @@
     .dot.running, .dot.revising { background: var(--accent); }
     .dot.ready { background: var(--ok); }
     .dot.failed { background: var(--err); }
-    .dot.uploaded { background: var(--warn); }
+    .dot.cancelled { background: var(--muted); }
     @media (max-width: 900px) {
       .sidebar { display: none; }
       .drawer { position: absolute; inset: 0; width: auto; z-index: 10; }
@@ -228,6 +228,7 @@
       <div class="actions">
         <button class="chip-btn" id="runFull">重新整跑</button>
         <button class="chip-btn" id="runCases">只跑矩阵后</button>
+        <button class="chip-btn" id="cancelRun" hidden>终止</button>
         <button class="chip-btn" id="toggleDrawer">产物预览</button>
       </div>
     </div>
@@ -269,7 +270,7 @@
 </div>
 <script>
 const $ = id => document.getElementById(id);
-const STATUS = { uploaded: "待生成", running: "生成中", ready: "已完成", revising: "修订中", failed: "失败" };
+const STATUS = { uploaded: "待生成", running: "生成中", ready: "已完成", revising: "修订中", failed: "失败", cancelled: "已终止" };
 let current = null, timer = null, pending = [], queuedChat = "", jobBusy = false;
 
 function isBusyStatus(s) {
@@ -318,11 +319,18 @@ function welcomeHTML() {
 function fileCards(names) {
   return `<div class="files">${names.map(n => `<span class="file-card"><span class="file-ico">${esc(String(n).split(".").pop().slice(0,3).toUpperCase())}</span>${esc(n)}</span>`).join("")}</div>`;
 }
+function fileIco(name) {
+  const ext = String(name).split(".").pop().toUpperCase();
+  if (ext === "XLSX") return "XLS";
+  if (ext === "OPML") return "OPML";
+  if (ext === "MM") return "MM";
+  return "MD";
+}
 function artCards(job) {
   const entries = Object.entries(job.artifacts || {});
   if (!entries.length) return "";
   return `<div class="files">${entries.map(([k, f]) =>
-    `<a class="art-card" href="/api/jobs/${job.id}/artifacts/${encodeURIComponent(f)}" target="_blank"><span class="file-ico">MD</span>${esc(f)}</a>`
+    `<a class="art-card" href="/api/jobs/${job.id}/artifacts/${encodeURIComponent(f)}" target="_blank"><span class="file-ico">${fileIco(f)}</span>${esc(f)}</a>`
   ).join("")}</div>`;
 }
 function thinkingCard(job) {
@@ -336,8 +344,9 @@ function thinkingCard(job) {
     <strong>${esc(STATUS[job.status] || job.status)}</strong>
     ${job.case_count != null ? ` · ${job.case_count} 条用例` : ""}
     ${errors.length ? `<div style="color:var(--err);margin-top:6px">${esc(errors.join("; "))}</div>` : ""}
+    ${job.current_step ? `<div class="log-line">进度 ${esc(job.current_step)}</div>` : ""}
     ${last ? `<div class="log-line">${esc(last)}</div>` : ""}
-    ${job.status === "ready" ? artCards(job) : ""}
+    ${["ready","failed","cancelled"].includes(job.status) ? artCards(job) : ""}
   </div>`;
 }
 function pendingReplyHTML() {
@@ -345,8 +354,11 @@ function pendingReplyHTML() {
 }
 function renderThread(job) {
   jobBusy = isBusyStatus(job.status);
+  const canResume = !!job.can_resume_cases;
   $("runFull").disabled = jobBusy;
-  $("runCases").disabled = jobBusy;
+  $("runCases").disabled = jobBusy || !canResume;
+  $("runCases").title = canResume ? "复用矩阵，只重生成用例" : (jobBusy ? "正在运行" : "尚未生成覆盖矩阵");
+  $("cancelRun").hidden = !jobBusy;
   syncSend();
   $("threadBar").hidden = false;
   $("title").textContent = job.title || "未命名任务";
@@ -418,7 +430,7 @@ async function select(id) {
   await refreshJobs();
   if (current !== id) return;
   if ($("drawer").classList.contains("open") && $("previewName").value) loadPreview();
-  if (queuedChat && j.status === "ready") {
+  if (queuedChat && (j.status === "ready" || j.awaiting_scope)) {
     const msg = queuedChat; queuedChat = "";
     await api("/api/jobs/"+id+"/chat", {
       method:"POST",
@@ -446,12 +458,15 @@ async function createAndRun() {
   const res = await fetch("/api/jobs", {method:"POST", headers: headers(), body: fd});
   const data = await res.json();
   if (!res.ok) { alert(data.error || "创建失败"); return; }
-  await api("/api/jobs/"+data.id+"/run", {
-    method:"POST",
-    headers:{...headers(),"Content-Type":"application/json"},
-    body: JSON.stringify({from:"requirements"})
-  }).catch(() => {});
   await select(data.id);
+  if (!data.awaiting_scope) {
+    await api("/api/jobs/"+data.id+"/run", {
+      method:"POST",
+      headers:{...headers(),"Content-Type":"application/json"},
+      body: JSON.stringify({from:"requirements"})
+    }).catch(() => {});
+    await select(data.id);
+  }
 }
 async function send() {
   const text = $("chatText").value.trim();
@@ -512,8 +527,24 @@ $("chatText").onkeydown = e => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!$("send").disabled) send(); }
 };
 $("send").onclick = send;
-$("runFull").onclick = () => run("requirements");
-$("runCases").onclick = () => run("testcases");
+$("runFull").onclick = () => {
+  if (!current) return;
+  if (!confirm("将按需求重新生成，已有方案和用例会被覆盖。确定？")) return;
+  run("requirements");
+};
+$("runCases").onclick = () => {
+  if ($("runCases").disabled) return;
+  run("testcases");
+};
+$("cancelRun").onclick = async () => {
+  if (!current) return;
+  try {
+    await api("/api/jobs/"+current+"/cancel", {method:"POST"});
+  } catch (e) {
+    alert(e.message || "终止失败");
+  }
+  select(current);
+};
 $("toggleDrawer").onclick = () => { $("drawer").classList.toggle("open"); loadPreview(); };
 $("closeDrawer").onclick = () => $("drawer").classList.remove("open");
 $("previewName").onchange = loadPreview;

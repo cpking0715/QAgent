@@ -22,7 +22,7 @@ from qagent.agent.prompts import (
     extract_document,
 )
 from qagent.config import QAgentConfig
-from qagent.exporters import ExportContext, get_exporter
+from qagent.exporters import export_cases_xlsx
 from qagent.exporters.mindmap import write_test_plan_mindmaps
 from qagent.parsing import (
     CoverageRow,
@@ -126,6 +126,10 @@ def keep_one_case_per_row(
     return [picked[sid] for sid in wanted if sid in picked]
 
 
+class JobCancelled(Exception):
+    """用户请求终止当前流水线。"""
+
+
 @dataclass
 class RunResult:
     success: bool
@@ -145,13 +149,20 @@ class QAgentRunner:
         config: QAgentConfig,
         llm: LLMClient,
         on_log: Callable[[str], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> None:
         self.config = config
         self.llm = llm
         self.schema = load_schema(config.schema_path)
         self._on_log = on_log
+        self._should_cancel = should_cancel or (lambda: False)
+
+    def _check_cancel(self) -> None:
+        if self._should_cancel():
+            raise JobCancelled("用户终止")
 
     def _log(self, message: str) -> None:
+        self._check_cancel()
         ts = datetime.now().strftime("%H:%M:%S")
         print(f"[QAgent {ts}] {message}", flush=True)
         if self._on_log:
@@ -201,6 +212,7 @@ class QAgentRunner:
     def _write_cases(self, cases: list[dict]) -> str:
         content = render_testcases_md(cases)
         self._write(self.config.testcases_path, content)
+        export_cases_xlsx(self.config.testcases_xlsx_path, self.schema, cases)
         return content
 
     def _write_review(self, matrix_rows: list[CoverageRow], cases: list[dict]) -> str:
@@ -222,6 +234,7 @@ class QAgentRunner:
         self._log(f"  覆盖矩阵按需求分 {total} 批，并行 {workers} 路")
 
         def work(index: int, reqs: list[str]) -> tuple[int, list[CoverageRow]]:
+            self._check_cancel()
             sys_prompt, user_prompt = build_coverage_matrix_prompt(
                 treq_content, plan_content, risk_content, self.config,
                 requirement_ids=reqs,
@@ -240,6 +253,7 @@ class QAgentRunner:
                 for index, chunk in enumerate(chunks, 1)
             ]
             for future in as_completed(futures):
+                self._check_cancel()
                 index, rows = future.result()
                 by_index[index] = rows
                 self._log(f"  矩阵批次 {index}/{total} 解析到 {len(rows)} 行")
@@ -267,6 +281,7 @@ class QAgentRunner:
         self._log(f"  用例 {total} 批并行 {workers} 路，每批最多 {CASE_BATCH_SIZE} 行")
 
         def work(index: int, chunk: list[CoverageRow]) -> tuple[int, list[dict]]:
+            self._check_cancel()
             matrix_slice = render_coverage_table(chunk)
             sys_prompt, user_prompt = build_testcases_prompt(
                 treq_content, plan_content, risk_content, matrix_slice, self.config,
@@ -288,6 +303,7 @@ class QAgentRunner:
                 for index, chunk in enumerate(chunks, 1)
             ]
             for future in as_completed(futures):
+                self._check_cancel()
                 index, incoming = future.result()
                 self._log(f"  批次 {index}/{total} 保留 {len(incoming)} 条（一行一条）")
                 cases = merge_cases(cases, incoming)
@@ -576,6 +592,7 @@ class QAgentRunner:
             self._log(f"脚本补齐后仍有 {len(errors)} 项：{errors[0]}")
             if attempt >= self.config.retry_limit:
                 result.errors = errors
+                result.case_count = len(cases)
                 return result
             self._log("请求 LLM 修正 ...")
             t0 = time.perf_counter()
@@ -597,15 +614,10 @@ class QAgentRunner:
             review_content = self._write_review(matrix_rows, cases)
             self._log(f"修正完成，耗时 {time.perf_counter() - t0:.0f}s")
 
-        # Step 9: export
+        # Step 9: 标记导出（xlsx 已在每次写 testcases.md 时同步）
         self._log(f"Step 9/{total_steps} 导出 testcases.xlsx ...")
         cases = parse_cases(self.config.testcases_path)
-        exporter = get_exporter("xlsx")
-        exporter.export(ExportContext(
-            output_path=self.config.testcases_xlsx_path,
-            schema=self.schema,
-            cases=cases,
-        ))
+        export_cases_xlsx(self.config.testcases_xlsx_path, self.schema, cases)
         mark_step(self.config, PipelineStep.EXPORT)
         result.steps_completed.append("export")
 

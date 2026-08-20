@@ -30,6 +30,9 @@ def _seed_output(store: JobStore, job_id: str) -> None:
         src = FIXTURES / name
         dest = out / ("testcases.md" if name == "testcases-valid.md" else name)
         dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    treq = FIXTURES / "test-requirements-generated.md"
+    if treq.is_file():
+        (out / "test-requirements.md").write_text(treq.read_text(encoding="utf-8"), encoding="utf-8")
     review = FIXTURES / "qa-review.md"
     if review.is_file():
         (out / "qa-review.md").write_text(review.read_text(encoding="utf-8"), encoding="utf-8")
@@ -167,8 +170,38 @@ def test_upsert_fills_missing_requirement_ref(tmp_path):
     perf = next(case for case in cases if case["id"] == "TC-PERF-001")
     assert perf["requirement_ref"]
     assert perf["type"] == "功能"
+    from openpyxl import load_workbook
+    ws = load_workbook(store.output_dir(job.id) / "testcases.xlsx").active
+    xlsx_ids = [ws.cell(row, 1).value for row in range(2, ws.max_row + 1)]
+    assert "TC-PERF-001" in xlsx_ids
     result = validate_and_export(store, job.id, fill_gaps=True)
     assert result["ok"], result
+
+
+def test_upsert_without_validate_still_updates_xlsx(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    job = store.create()
+    _seed_output(store, job.id)
+    notes, validated, _ = apply_actions(store, job.id, [{
+        "op": "upsert_cases",
+        "cases": [{
+            "id": "TC-PERF-002",
+            "title": "复杂文档识别耗时",
+            "priority": "P1",
+            "type": "功能",
+            "preconditions": [],
+            "steps": ["上传复杂图并计时"],
+            "expected": "15秒内返回",
+            "design_method": "场景法",
+            "requirement_ref": "R1",
+        }],
+    }])
+    assert validated is None
+    assert "已合并" in notes[0]
+    from openpyxl import load_workbook
+    ws = load_workbook(store.output_dir(job.id) / "testcases.xlsx").active
+    xlsx_ids = [ws.cell(row, 1).value for row in range(2, ws.max_row + 1)]
+    assert "TC-PERF-002" in xlsx_ids
 
 
 def test_apply_actions_rollback_on_bad_delete(tmp_path):
@@ -176,15 +209,19 @@ def test_apply_actions_rollback_on_bad_delete(tmp_path):
     job = store.create()
     _seed_output(store, job.id)
     before = (store.output_dir(job.id) / "testcases.md").read_text(encoding="utf-8")
-    from qagent.server.tools import restore_snapshot, snapshot_output
-    snapshot_output(store, job.id)
-    try:
-        apply_actions(store, job.id, [
-            {"op": "delete_cases", "ids": ["TC-REG-001", "TC-REG-002", "TC-REG-003"]},
-            {"op": "validate_and_export", "fill_gaps": False},
-        ])
-    except ValueError:
-        restore_snapshot(store, job.id)
+
+    class DelLLM:
+        def complete(self, system, user):
+            return json.dumps({
+                "reply": "已删除",
+                "actions": [
+                    {"op": "delete_cases", "ids": ["TC-REG-001", "TC-REG-002", "TC-REG-003"]},
+                    {"op": "validate_and_export", "fill_gaps": False},
+                ],
+            })
+
+    result = run_chat(store, job.id, "删掉所有用例", DelLLM())
+    assert not result["ok"]
     after = (store.output_dir(job.id) / "testcases.md").read_text(encoding="utf-8")
     assert after == before
 
@@ -219,6 +256,10 @@ def test_run_chat_json_actions(tmp_path):
     assert result["ok"], result
     cases = (store.output_dir(job.id) / "testcases.md").read_text(encoding="utf-8")
     assert "TC-REG-008" in cases
+    from openpyxl import load_workbook
+    ws = load_workbook(store.output_dir(job.id) / "testcases.xlsx").active
+    xlsx_ids = [ws.cell(row, 1).value for row in range(2, ws.max_row + 1)]
+    assert "TC-REG-008" in xlsx_ids
     chat = store.load_chat(job.id)
     assert [m["role"] for m in chat] == ["user", "assistant"]
 
@@ -283,6 +324,7 @@ def test_http_multipart_upload_creates_job(tmp_path):
         )
         job = json.loads(urlopen(req, timeout=3).read())
         assert job["id"]
+        assert job.get("awaiting_scope") is True
         got = json.loads(urlopen(f"http://127.0.0.1:{port}/api/jobs/{job['id']}", timeout=3).read())
         assert "req.md" in got["inputs"]
     finally:
@@ -313,3 +355,144 @@ def test_feishu_url_verification(tmp_path):
     service = QAgentService(JobStore(tmp_path / "jobs"), llm_factory=lambda: MockLLM({}))
     out = handle_feishu_event(service, {"type": "url_verification", "challenge": "abc"})
     assert out["challenge"] == "abc"
+
+
+def test_create_job_asks_scope_without_test_requirements(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    service = QAgentService(store, llm_factory=lambda: MockLLM({}))
+    job = service.create_job("t", [("prd.md", "# 产品\n登录\n".encode("utf-8"))])
+    assert job["awaiting_scope"] is True
+    assert any("测试范围" in m["content"] for m in job["chat"])
+
+
+def test_create_job_skips_scope_when_test_requirements_uploaded(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    service = QAgentService(store, llm_factory=lambda: MockLLM({}))
+    job = service.create_job("t", [("测试需求.md", "# 测试需求\n全量\n".encode("utf-8"))])
+    assert job["awaiting_scope"] is False
+
+
+def test_scope_confirm_starts_run(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    service = QAgentService(store, llm_factory=lambda: MockLLM({}))
+    job = service.create_job("t", [("prd.md", "# 产品\n登录\n".encode("utf-8"))])
+    result = service.chat(job["id"], "可以")
+    assert result["rerun"] == "requirements"
+    assert (store.input_dir(job["id"]) / "测试需求.md").is_file()
+    assert store.load(job["id"]).awaiting_scope is False
+    assert store.load(job["id"]).status in {"running", "ready", "failed"}
+
+
+def test_start_run_from_testcases_requires_matrix(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    service = QAgentService(store, llm_factory=lambda: MockLLM({}))
+    job = store.create()
+    store.save_upload(job.id, "req.md", b"# hello\n")
+    with pytest.raises(RuntimeError, match="覆盖矩阵"):
+        service.start_run(job.id, "testcases")
+    _seed_output(store, job.id)
+    public = service.start_run(job.id, "testcases")
+    assert public["status"] == "running"
+
+
+def test_cancel_job_marks_cancelled(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    started = threading.Event()
+    release = threading.Event()
+
+    class SlowLLM:
+        def complete(self, system, user):
+            started.set()
+            release.wait(timeout=3)
+            return "ok"
+
+    service = QAgentService(store, llm_factory=lambda: SlowLLM(), max_pipeline=2)
+    job = store.create()
+    store.save_upload(job.id, "req.md", b"# hello\n")
+    service.start_run(job.id, "requirements")
+    assert started.wait(timeout=2)
+    public = service.cancel_job(job.id)
+    assert public["cancel_requested"] is True
+    release.set()
+    got = None
+    for _ in range(80):
+        got = service.get_job(job.id)
+        if got["status"] == "cancelled":
+            break
+        time.sleep(0.05)
+    assert got is not None
+    assert got["status"] == "cancelled"
+    service.start_run(job.id, "requirements")
+    assert store.load(job.id).status == "running"
+    release.set()
+
+
+def test_feishu_rebind_creates_new_job_keeps_old(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    service = QAgentService(store, llm_factory=lambda: MockLLM({}))
+    first = service.create_job("u", [("a.md", b"# A\n")])
+    second = service.create_job("u", [("b.md", b"# B\n")])
+    store.bind_feishu(first["id"], "oc_chat", "u")
+    store.bind_feishu(second["id"], "oc_chat", "u")
+    assert store.job_for_feishu_chat("oc_chat") == second["id"]
+    assert store.load(first["id"]).id == first["id"]
+
+
+def test_read_artifact_performance_synonyms(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    job = store.create()
+    _seed_output(store, job.id)
+    cases = store.output_dir(job.id) / "testcases.md"
+    cases.write_text(cases.read_text(encoding="utf-8") + "\n总耗时 T ≤ 4秒\n", encoding="utf-8")
+    from qagent.server.tools import read_artifact
+    found = read_artifact(store, job.id, "cases", "性能")
+    assert "耗时" in found
+
+
+def test_chat_keeps_good_case_drops_bad_on_validate(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    job = store.create()
+    _seed_output(store, job.id)
+    before_ids = {c["id"] for c in parse_cases(store.output_dir(job.id) / "testcases.md")}
+
+    class MixedLLM:
+        def complete(self, system, user):
+            return json.dumps({
+                "reply": "已补",
+                "actions": [
+                    {
+                        "op": "upsert_cases",
+                        "cases": [
+                            {
+                                "id": "TC-REG-008",
+                                "title": "SC-001 好用例",
+                                "priority": "P1",
+                                "type": "功能",
+                                "preconditions": [],
+                                "steps": ["打开注册"],
+                                "expected": "可打开",
+                                "design_method": "场景法",
+                                "requirement_ref": "R1",
+                            },
+                            {
+                                "id": "INVALID",
+                                "title": "坏用例",
+                                "priority": "P1",
+                                "type": "功能",
+                                "preconditions": [],
+                                "steps": ["x"],
+                                "expected": "y",
+                                "design_method": "场景法",
+                                "requirement_ref": "R-NOT-EXIST",
+                            },
+                        ],
+                    },
+                    {"op": "validate_and_export", "fill_gaps": False},
+                ],
+            })
+
+    run_chat(store, job.id, "补两条", MixedLLM())
+    after = {c["id"] for c in parse_cases(store.output_dir(job.id) / "testcases.md")}
+    assert "TC-REG-008" in after
+    assert "INVALID" not in after
+    assert before_ids <= after
