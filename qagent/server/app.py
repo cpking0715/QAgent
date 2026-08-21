@@ -11,7 +11,7 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from qagent.config import public_llm_settings, update_local_llm
 from qagent.ingest import SUPPORTED
@@ -167,9 +167,26 @@ def create_handler(service: QAgentService):
             if len(parts) == 5 and parts[1:3] == ["api", "jobs"] and parts[4] == "events":
                 self._sse_events(parts[3], parsed.query)
                 return
+            if len(parts) == 6 and parts[1:3] == ["api", "jobs"] and parts[4] == "inputs":
+                # GET /api/jobs/{id}/inputs/{name} —— 输入文档预览（pdf/docx 抽取文本）
+                try:
+                    text = service.input_file_text(parts[3], unquote(parts[5]))
+                except FileNotFoundError as exc:
+                    _json(self, 404, {"error": str(exc)})
+                    return
+                except ValueError as exc:
+                    _json(self, 400, {"error": str(exc)})
+                    return
+                data = text.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             if len(parts) == 6 and parts[1:3] == ["api", "jobs"] and parts[4] == "artifacts":
                 try:
-                    file_path = service.artifact_path(parts[3], parts[5])
+                    file_path = service.artifact_path(parts[3], unquote(parts[5]))
                 except (FileNotFoundError, ValueError) as exc:
                     _json(self, 404, {"error": str(exc)})
                     return
@@ -241,6 +258,20 @@ def create_handler(service: QAgentService):
                     body = _read_json(self)
                     _json(self, 200, service.start_chat(parts[3], str(body.get("message") or "")))
                 except (FileNotFoundError, RuntimeError, ValueError) as exc:
+                    _json(self, 400, {"error": str(exc)})
+                return
+            if len(parts) == 5 and parts[1:3] == ["api", "jobs"] and parts[4] == "review":
+                # POST /api/jobs/{id}/review {target, name} —— AI 审阅文件
+                try:
+                    body = _read_json(self)
+                    _json(self, 200, service.start_review(
+                        parts[3],
+                        str(body.get("target") or "artifact"),
+                        str(body.get("name") or ""),
+                    ))
+                except FileNotFoundError as exc:
+                    _json(self, 404, {"error": str(exc)})
+                except (RuntimeError, ValueError) as exc:
                     _json(self, 400, {"error": str(exc)})
                 return
             self.send_error(404)

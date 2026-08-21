@@ -278,6 +278,21 @@
       position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 40;
       display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none;
     }
+    .review-box {
+      border-top: 1px dashed var(--line); margin-top: 0;
+      display: flex; flex-direction: column; min-height: 0; max-height: 45%;
+      background: #fbfcff;
+    }
+    .review-head {
+      padding: 10px 16px 6px; font-size: 13px; font-weight: 600; color: var(--accent);
+      flex-shrink: 0;
+    }
+    .review-body {
+      flex: 1; overflow: auto; padding: 0 16px 14px;
+      font-size: 13px; line-height: 1.65; color: #2b2f36; white-space: pre-wrap;
+    }
+    .files .file-card { cursor: pointer; }
+    .files .file-card:hover { border-color: #c9d4ff; background: var(--accent-soft); }
     .toast {
       background: #1f2329; color: #fff; font-size: 13px;
       padding: 9px 16px; border-radius: 10px; box-shadow: var(--shadow);
@@ -347,12 +362,17 @@
   <aside class="drawer" id="drawer">
     <header>
       <select id="previewName"></select>
+      <button class="chip-btn" id="reviewBtn" title="AI 审阅当前文件">审阅</button>
       <button class="chip-btn" id="editArtifact">编辑</button>
       <button class="chip-btn" id="saveArtifact" hidden>保存</button>
       <button class="chip-btn" id="closeDrawer">关闭</button>
     </header>
-    <div class="preview" id="preview">选择一份 Markdown 产物查看</div>
+    <div class="preview" id="preview">选择输入文档或 Markdown 产物查看</div>
     <textarea id="previewEdit" hidden spellcheck="false"></textarea>
+    <div class="review-box" id="reviewBox" hidden>
+      <div class="review-head">AI 审阅</div>
+      <div class="review-body" id="reviewBody"></div>
+    </div>
   </aside>
 </div>
 <input id="files" type="file" multiple hidden accept=".md,.txt,.markdown,.pdf,.docx,.doc">
@@ -388,7 +408,12 @@ const $ = id => document.getElementById(id);
 const STATUS = { uploaded: "待生成", running: "生成中", ready: "已完成", revising: "修订中", failed: "失败", cancelled: "已终止" };
 let current = null, timer = null, pending = [], queuedChat = "", jobBusy = false;
 let evtSource = null, lastListAt = 0;
-let lastJob = null, logsExpanded = false;
+let lastJob = null, logsExpanded = false, reviewingKey = null;
+const ART_LABELS = {
+  "test-requirements.md": "测试需求", "test-plan.md": "测试方案",
+  "risk.md": "风险分析", "coverage-matrix.md": "覆盖矩阵",
+  "testcases.md": "测试用例", "qa-review.md": "QA Review",
+};
 function closeEvents() { if (evtSource) { try { evtSource.close(); } catch (e) {} evtSource = null; } }
 function connectEvents(id) {
   closeEvents();
@@ -542,7 +567,41 @@ function welcomeHTML() {
   </div>`;
 }
 function fileCards(names) {
-  return `<div class="files">${names.map(n => `<span class="file-card"><span class="file-ico">${esc(String(n).split(".").pop().slice(0,3).toUpperCase())}</span>${esc(n)}</span>`).join("")}</div>`;
+  return `<div class="files">${names.map(n => `<button class="file-card" type="button" data-name="${esc(n)}"><span class="file-ico">${esc(String(n).split(".").pop().slice(0,3).toUpperCase())}</span>${esc(n)}</button>`).join("")}</div>`;
+}
+function previewTarget(name) {
+  // 当前选中文件是输入文档还是生成产物
+  return (lastJob && (lastJob.inputs || []).includes(name)) ? "input" : "artifact";
+}
+function reviewLabelOf(name) {
+  return previewTarget(name) === "input" ? name : (ART_LABELS[name] || name);
+}
+function renderReviewBox() {
+  const box = $("reviewBox"), body = $("reviewBody");
+  const name = $("previewName").value;
+  if (!name || editingArtifact) { box.hidden = true; return; }
+  const key = previewTarget(name) + ":" + name;
+  const label = reviewLabelOf(name);
+  const marker = "【审阅·" + label + "】";
+  let msg = null;
+  const chat = (lastJob && lastJob.chat) || [];
+  for (let i = chat.length - 1; i >= 0; i--) {
+    const c = chat[i];
+    if (c.role === "assistant" && String(c.content || "").startsWith(marker)) {
+      msg = String(c.content).slice(marker.length).trim();
+      break;
+    }
+  }
+  if (msg) {
+    reviewingKey = null;
+    body.textContent = msg;
+    box.hidden = false;
+  } else if (reviewingKey === key) {
+    body.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>正在审阅「' + esc(label) + '」…';
+    box.hidden = false;
+  } else {
+    box.hidden = true;
+  }
 }
 function artCards(job) {
   const rows = job.deliverables || [];
@@ -621,8 +680,33 @@ function renderThread(job) {
   $("msgs").querySelectorAll(".log-toggle").forEach(b => {
     b.onclick = () => { logsExpanded = !logsExpanded; renderThread(lastJob); };
   });
+  $("msgs").querySelectorAll(".files .file-card").forEach(b => {
+    b.onclick = () => {
+      $("drawer").classList.add("open");
+      setArtifactEditing(false);
+      $("previewName").value = b.dataset.name;
+      loadPreview();
+    };
+  });
   const mds = Object.values(job.artifacts || {}).filter(f => String(f).endsWith(".md"));
-  $("previewName").innerHTML = mds.map(f => `<option>${esc(f)}</option>`).join("");
+  const ins = job.inputs || [];
+  const grp = (label, arr) => arr.length
+    ? `<optgroup label="${label}">${arr.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join("")}</optgroup>`
+    : "";
+  const prevSel = $("previewName").value;
+  $("previewName").innerHTML = grp("输入文档", ins) + grp("生成产物", mds);
+  if (prevSel && [...$("previewName").options].some(o => o.value === prevSel)) {
+    $("previewName").value = prevSel;  // SSE 刷新时不丢当前选中文件
+  }
+  syncPreviewButtons();
+  renderReviewBox();
+}
+function syncPreviewButtons() {
+  const name = $("previewName").value;
+  const isInput = !!name && previewTarget(name) === "input";
+  $("editArtifact").hidden = isInput || !name;  // 输入文档不可在线编辑
+  $("reviewBtn").disabled = jobBusy || !name;
+  $("reviewBtn").textContent = reviewingKey ? "审阅中…" : "审阅";
 }
 function showWelcome() {
   clearTimeout(timer);
@@ -698,9 +782,13 @@ async function select(id) {
 }
 async function loadPreview() {
   if (!current || !$("previewName").value) return;
-  const res = await fetch("/api/jobs/"+current+"/artifacts/"+encodeURIComponent($("previewName").value), {headers: headers()});
+  const name = $("previewName").value;
+  const base = previewTarget(name) === "input" ? "/inputs/" : "/artifacts/";
+  const res = await fetch("/api/jobs/"+current+base+encodeURIComponent(name), {headers: headers()});
   const text = await res.text();
-  $("preview").textContent = text.slice(0, 20000);
+  $("preview").textContent = res.ok ? text.slice(0, 20000) : ("加载失败: " + text);
+  syncPreviewButtons();
+  renderReviewBox();
 }
 let editingArtifact = false;
 function setArtifactEditing(on) {
@@ -709,9 +797,14 @@ function setArtifactEditing(on) {
   $("previewEdit").hidden = !on;
   $("editArtifact").textContent = on ? "取消" : "编辑";
   $("saveArtifact").hidden = !on;
+  renderReviewBox();
 }
 $("editArtifact").onclick = async () => {
   if (!current || !$("previewName").value) return;
+  if (previewTarget($("previewName").value) === "input") {
+    toast("输入文档不支持在线编辑，可在对话中让我按它调整产物");
+    return;
+  }
   if (editingArtifact) { setArtifactEditing(false); loadPreview(); return; }
   const res = await fetch("/api/jobs/"+current+"/artifacts/"+encodeURIComponent($("previewName").value), {headers: headers()});
   $("previewEdit").value = await res.text();
@@ -869,7 +962,29 @@ $("toggleDrawer").onclick = () => {
   loadPreview();
 };
 $("closeDrawer").onclick = () => { $("drawer").classList.remove("open"); setArtifactEditing(false); };
-$("previewName").onchange = () => { setArtifactEditing(false); loadPreview(); };
+$("previewName").onchange = () => { setArtifactEditing(false); syncPreviewButtons(); loadPreview(); };
+$("reviewBtn").onclick = async () => {
+  if (!current || !$("previewName").value || jobBusy) return;
+  const name = $("previewName").value;
+  const target = previewTarget(name);
+  reviewingKey = target + ":" + name;
+  syncPreviewButtons();
+  renderReviewBox();
+  try {
+    await api("/api/jobs/"+current+"/review", {
+      method: "POST",
+      headers: {...headers(), "Content-Type": "application/json"},
+      body: JSON.stringify({target, name})
+    });
+  } catch (e) {
+    reviewingKey = null;
+    syncPreviewButtons();
+    renderReviewBox();
+    toast(e.message || "审阅失败", "err");
+    return;
+  }
+  select(current);  // 状态已变 revising：重连 SSE 等审阅结果
+};
 async function loadLlmSettings() {
   $("apiKey").value = "";
   try {
