@@ -25,6 +25,7 @@ from qagent.server.chat import (
     run_chat,
 )
 from qagent.server.jobs import ARTIFACT_NAMES, JobStore
+from qagent.server.openwith import list_apps_for_extension
 from qagent.server.scope import SCOPE_DRAFT, inputs_include_test_requirements
 from qagent.server.tools import job_config
 
@@ -329,8 +330,8 @@ class QAgentService:
     # 保证任何 shell 元字符都进不了 subprocess 参数
     _SAFE_FILENAME = re.compile(r"^[\w.\-\u4e00-\u9fff]+$")
 
-    def open_file(self, job_id: str, target: str, name: str) -> dict:
-        """本地场景：按文件类型交给系统默认应用打开（xlsx→表格、md→编辑器、pdf→阅读器）。"""
+    def _job_file_path(self, job_id: str, target: str, name: str) -> Path:
+        """解析并校验任务文件路径（open/open-with 共用）。"""
         if target not in {"input", "artifact"}:
             raise ValueError("target 必须是 input 或 artifact")
         safe = Path(name).name
@@ -340,11 +341,29 @@ class QAgentService:
             path = self.store.input_dir(job_id) / safe
             if not path.is_file():
                 raise FileNotFoundError(safe)
-        else:
-            path = self.artifact_path(job_id, safe)  # 复用产物目录安全校验
+            return path
+        return self.artifact_path(job_id, safe)  # 复用产物目录安全校验
+
+    def list_open_with(self, job_id: str, target: str, name: str) -> dict:
+        """枚举本机声明支持该文件类型的打开方式（macOS 应用清单）。"""
+        path = self._job_file_path(job_id, target, name)
+        apps = list_apps_for_extension(path.suffix) if platform.system() == "Darwin" else []
+        return {"name": path.name, "ext": (path.suffix or "").lstrip(".").lower(), "apps": apps}
+
+    def open_file(self, job_id: str, target: str, name: str, app: str | None = None) -> dict:
+        """本地场景：按文件类型交给系统默认应用打开；指定 app 时用 `open -a` 打开。"""
+        path = self._job_file_path(job_id, target, name)
         system = platform.system()
-        if system == "Darwin":
-            # 不带 -t：交给系统按文件类型关联的默认应用，由用户本机设置决定
+        if app and system != "Darwin":
+            raise ValueError("指定应用打开仅支持 macOS")
+        if app:
+            # 应用名必须在枚举结果内，防止任意值进入命令参数
+            allowed = {a["name"] for a in list_apps_for_extension(path.suffix)}
+            if app not in allowed:
+                raise ValueError(f"未找到可打开 .{path.suffix.lstrip('.')} 的应用: {app}")
+            proc = subprocess.run(["open", "-a", app, str(path)], capture_output=True, timeout=10)
+        elif system == "Darwin":
+            # 交给系统按文件类型关联的默认应用，由用户本机设置决定
             proc = subprocess.run(["open", str(path)], capture_output=True, timeout=10)
         elif system == "Windows":
             os.startfile(str(path))  # type: ignore[attr-defined]
