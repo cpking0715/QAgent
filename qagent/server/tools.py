@@ -9,7 +9,6 @@ from pathlib import Path
 
 from qagent.config import QAgentConfig, resolve_config
 from qagent.exporters import export_cases_xlsx
-from qagent.exporters.mindmap import write_requirements_drawio
 from qagent.parsing import (
     fill_missing_cases,
     merge_cases,
@@ -173,10 +172,6 @@ def validate_and_export(store: JobStore, job_id: str, fill_gaps: bool = True) ->
                 normalize_case(case, req_ids, sc_to_req, req_items=req_items)
             _write_cases_and_xlsx(config, cases)
     if config.test_requirements_path.is_file():
-        write_requirements_drawio(
-            config.test_requirements_path,
-            config.test_requirements_drawio_path,
-        )
         from qagent.exporters.mindmap import write_requirements_xmind
 
         write_requirements_xmind(

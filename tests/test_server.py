@@ -177,8 +177,7 @@ def test_patch_upsert_delete_and_validate(tmp_path):
     result = validate_and_export(store, job.id, fill_gaps=True)
     assert result["ok"], result.get("errors")
     assert (store.output_dir(job.id) / "testcases.xlsx").is_file()
-    assert (store.output_dir(job.id) / "test-requirements.drawio").is_file()
-    assert not (store.output_dir(job.id) / "test-plan.drawio").exists()
+    assert (store.output_dir(job.id) / "test-requirements.xmind").is_file()
 
 
 def test_upsert_fills_missing_requirement_ref(tmp_path):
@@ -570,10 +569,10 @@ def test_public_job_includes_deliverables(tmp_path):
     service = QAgentService(store, llm_factory=lambda: MockLLM({}))
     job = store.create()
     (store.output_dir(job.id) / "test-requirements.md").write_text("# 需求\n", encoding="utf-8")
-    (store.output_dir(job.id) / "test-requirements.drawio").write_text("<mxfile/>", encoding="utf-8")
+    (store.output_dir(job.id) / "test-requirements.xmind").write_bytes(b"PK\x03\x04")
     store.refresh_artifacts(job.id)
     got = service.get_job(job.id)
     titles = [d["title"] for d in got["deliverables"]]
-    assert titles == ["测试需求", "需求导图"]
+    assert titles == ["测试需求", "需求导图（XMind）"]
     assert got["deliverables"][0]["role"] == "测什么、不测什么"
-    assert got["deliverables"][1]["file"] == "test-requirements.drawio"
+    assert got["deliverables"][1]["file"] == "test-requirements.xmind"

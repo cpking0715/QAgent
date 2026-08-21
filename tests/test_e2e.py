@@ -229,7 +229,7 @@ def test_cli_run_mock_end_to_end(tmp_path, monkeypatch, capsys):
     assert code == 0, f"stdout={captured.out}\nstderr={captured.err}"
     for name in (
         "test-requirements.md", "test-plan.md", "risk.md", "coverage-matrix.md",
-        "testcases.md", "qa-review.md", "testcases.xlsx", "test-requirements.drawio",
+        "testcases.md", "qa-review.md", "testcases.xlsx", "test-requirements.xmind",
     ):
         assert (out / name).is_file(), f"CLI 端到端缺少产物 {name}"
     assert "条用例" in captured.out

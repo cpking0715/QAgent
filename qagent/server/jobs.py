@@ -34,7 +34,6 @@ RESUME_FROM_MATRIX = (
 )
 ARTIFACT_NAMES = {
     "test-requirements.md": "test_requirements",
-    "test-requirements.drawio": "test_requirements_drawio",
     "test-requirements.xmind": "test_requirements_xmind",
     "test-plan.md": "test_plan",
     "risk.md": "risk",

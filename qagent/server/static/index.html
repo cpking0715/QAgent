@@ -747,7 +747,7 @@ function artCards(job) {
   return `<div class="deliverables">${rows.map(row =>
     `<div class="deliv" data-file="${esc(row.file)}" title="点击预览">
       <div class="deliv-head"><strong>${esc(row.step)}. ${esc(row.title)}</strong>
-        <button class="chip-btn open-editor" type="button" data-file="${esc(row.file)}" title="用系统默认编辑器打开">编辑器打开</button></div>
+        <button class="chip-btn open-editor" type="button" data-file="${esc(row.file)}" title="用本机默认应用打开">本地打开</button></div>
       <div class="file">${esc(row.file)}</div>
       <p><b>作用</b>　${esc(row.role)}</p>
       ${row.content ? `<p><b>内容</b>　${esc(row.content)}</p>` : ""}
@@ -763,7 +763,7 @@ async function openInEditor(name) {
       headers: {...headers(), "Content-Type": "application/json"},
       body: JSON.stringify({target, name})
     });
-    toast("已在系统编辑器中打开 " + name);
+    toast("已用本机默认应用打开 " + name);
   } catch (e) {
     toast(e.message || "打开失败", "err");
   }
