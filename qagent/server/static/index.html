@@ -279,7 +279,7 @@
       display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none;
     }
     .review-box {
-      border-top: 1px dashed var(--line); margin-top: 0;
+      border-top: 1px dashed var(--line); margin-top: 0; flex-shrink: 0;
       display: flex; flex-direction: column; min-height: 0; max-height: 45%;
       background: #fbfcff;
     }
@@ -293,6 +293,62 @@
     }
     .files .file-card { cursor: pointer; }
     .files .file-card:hover { border-color: #c9d4ff; background: var(--accent-soft); }
+    /* Markdown 渲染（预览与审阅区共用） */
+    .md-body { white-space: normal; font-size: 13px; line-height: 1.7; color: #2b2f36; }
+    .md-body h1, .md-body h2, .md-body h3, .md-body h4, .md-body h5, .md-body h6 {
+      margin: 16px 0 8px; font-weight: 640; line-height: 1.4;
+    }
+    .md-body h1 { font-size: 17px; }
+    .md-body h2 { font-size: 15.5px; border-bottom: 1px solid var(--line); padding-bottom: 5px; }
+    .md-body h3 { font-size: 14px; }
+    .md-body h4, .md-body h5, .md-body h6 { font-size: 13px; }
+    .md-body h1:first-child, .md-body h2:first-child, .md-body > :first-child { margin-top: 0; }
+    .md-body p { margin: 8px 0; }
+    .md-body table {
+      border-collapse: collapse; margin: 10px 0; display: block;
+      overflow-x: auto; max-width: 100%; white-space: nowrap;
+    }
+    .md-body th, .md-body td {
+      border: 1px solid var(--line); padding: 5px 10px; font-size: 12.5px; text-align: left;
+    }
+    .md-body th { background: #f7f8fa; font-weight: 600; }
+    .md-body pre {
+      background: #f6f7f9; border: 1px solid var(--line); border-radius: 8px;
+      padding: 10px 12px; overflow-x: auto; white-space: pre; margin: 10px 0;
+    }
+    .md-body code {
+      background: #f0f2f5; border-radius: 4px; padding: 1px 5px;
+      font-size: 12px; font-family: ui-monospace, Menlo, Consolas, monospace;
+    }
+    .md-body pre code { background: none; padding: 0; }
+    .md-body blockquote {
+      border-left: 3px solid #c9d4ff; margin: 8px 0; padding: 2px 12px; color: var(--muted);
+    }
+    .md-body ul, .md-body ol { margin: 8px 0; padding-left: 22px; }
+    .md-body li { margin: 3px 0; }
+    .md-body hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+    .md-body input[type="checkbox"] { margin-right: 5px; vertical-align: -2px; }
+    .md-body a { word-break: break-all; }
+    /* 抽屉：头部防挤压 + 分区拖拽 */
+    .drawer { position: relative; }
+    .drawer header select { flex: 1; min-width: 0; }
+    .drawer-actions { display: flex; gap: 8px; flex-shrink: 0; }
+    .drawer-actions .chip-btn { white-space: nowrap; }
+    .vsplit {
+      height: 10px; flex-shrink: 0; cursor: row-resize;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .vsplit::after {
+      content: ""; width: 40px; height: 4px; border-radius: 2px; background: var(--line);
+    }
+    .vsplit:hover::after, .vsplit.dragging::after { background: var(--accent); }
+    .hsplit { position: absolute; left: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 3; }
+    .hsplit::after {
+      content: ""; position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
+      width: 3px; height: 40px; border-radius: 2px; background: var(--line);
+    }
+    .hsplit:hover::after, .hsplit.dragging::after { background: var(--accent); }
+    @media (max-width: 900px) { .hsplit { display: none; } }
     .toast {
       background: #1f2329; color: #fff; font-size: 13px;
       padding: 9px 16px; border-radius: 10px; box-shadow: var(--shadow);
@@ -360,15 +416,19 @@
     </div>
   </section>
   <aside class="drawer" id="drawer">
+    <div class="hsplit" id="hsplit" title="拖动调整宽度"></div>
     <header>
       <select id="previewName"></select>
-      <button class="chip-btn" id="reviewBtn" title="AI 审阅当前文件">审阅</button>
-      <button class="chip-btn" id="editArtifact">编辑</button>
-      <button class="chip-btn" id="saveArtifact" hidden>保存</button>
-      <button class="chip-btn" id="closeDrawer">关闭</button>
+      <div class="drawer-actions">
+        <button class="chip-btn" id="reviewBtn" title="AI 审阅当前文件">审阅</button>
+        <button class="chip-btn" id="editArtifact">编辑</button>
+        <button class="chip-btn" id="saveArtifact" hidden>保存</button>
+        <button class="chip-btn" id="closeDrawer">关闭</button>
+      </div>
     </header>
     <div class="preview" id="preview">选择输入文档或 Markdown 产物查看</div>
     <textarea id="previewEdit" hidden spellcheck="false"></textarea>
+    <div class="vsplit" id="vsplit" hidden title="拖动调整审阅区高度"></div>
     <div class="review-box" id="reviewBox" hidden>
       <div class="review-head">AI 审阅</div>
       <div class="review-body" id="reviewBody"></div>
@@ -442,6 +502,70 @@ function isBusyStatus(s) {
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+}
+// 轻量 Markdown 渲染（先转义再生成标签，产物/审阅预览用，无外部依赖）
+function inlineMd(s) {
+  return s
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*\w])\*([^*\s][^*]*?)\*/g, "$1<em>$2</em>")
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+function mdToHtml(src) {
+  const lines = esc(src).split("\n");
+  const out = [];
+  let list = null, para = [];
+  const closePara = () => { if (para.length) { out.push("<p>" + inlineMd(para.join(" ")) + "</p>"); para = []; } };
+  const closeList = () => { if (list) { out.push("</" + list + ">"); list = null; } };
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (!t) { closePara(); closeList(); continue; }
+    if (t.startsWith("```")) {
+      closePara(); closeList();
+      const buf = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith("```")) { buf.push(lines[i]); i++; }
+      out.push("<pre><code>" + buf.join("\n") + "</code></pre>");
+      continue;
+    }
+    const h = /^(#{1,6})\s+(.*)$/.exec(t);
+    if (h) { closePara(); closeList(); const n = h[1].length; out.push(`<h${n}>${inlineMd(h[2])}</h${n}>`); continue; }
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(t)) { closePara(); closeList(); out.push("<hr>"); continue; }
+    if (t.startsWith("&gt;")) { closePara(); closeList(); out.push("<blockquote>" + inlineMd(t.slice(4).trim()) + "</blockquote>"); continue; }
+    if (t.includes("|") && i + 1 < lines.length && lines[i + 1].includes("-") &&
+        /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1])) {
+      closePara(); closeList();
+      const cells = row => row.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map(c => c.trim());
+      const head = cells(t);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].trim() && lines[i].includes("|")) { rows.push(cells(lines[i].trim())); i++; }
+      i--;
+      let tbl = "<table><thead><tr>" + head.map(c => "<th>" + inlineMd(c) + "</th>").join("") + "</tr></thead><tbody>";
+      for (const r of rows) tbl += "<tr>" + r.map(c => "<td>" + inlineMd(c) + "</td>").join("") + "</tr>";
+      out.push(tbl + "</tbody></table>");
+      continue;
+    }
+    const li = /^[-*+]\s+(.*)$/.exec(t);
+    if (li) {
+      if (list !== "ul") { closePara(); closeList(); out.push("<ul>"); list = "ul"; }
+      const cb = /^\[( |x|✓)\]\s+/.exec(li[1]);
+      const body = cb
+        ? `<input type="checkbox" disabled${/[x✓]/i.test(cb[1]) ? " checked" : ""}> ${inlineMd(li[1].slice(cb[0].length))}`
+        : inlineMd(li[1]);
+      out.push("<li>" + body + "</li>");
+      continue;
+    }
+    const oli = /^\d+[.)]\s+(.*)$/.exec(t);
+    if (oli) {
+      if (list !== "ol") { closePara(); closeList(); out.push("<ol>"); list = "ol"; }
+      out.push("<li>" + inlineMd(oli[1]) + "</li>");
+      continue;
+    }
+    para.push(t);
+  }
+  closePara(); closeList();
+  return out.join("\n");
 }
 function headers() {
   const h = {};
@@ -577,9 +701,10 @@ function reviewLabelOf(name) {
   return previewTarget(name) === "input" ? name : (ART_LABELS[name] || name);
 }
 function renderReviewBox() {
-  const box = $("reviewBox"), body = $("reviewBody");
+  const box = $("reviewBox"), body = $("reviewBody"), split = $("vsplit");
   const name = $("previewName").value;
-  if (!name || editingArtifact) { box.hidden = true; return; }
+  const show = (on) => { box.hidden = !on; split.hidden = !on; };
+  if (!name || editingArtifact) { show(false); return; }
   const key = previewTarget(name) + ":" + name;
   const label = reviewLabelOf(name);
   const marker = "【审阅·" + label + "】";
@@ -594,13 +719,13 @@ function renderReviewBox() {
   }
   if (msg) {
     reviewingKey = null;
-    body.textContent = msg;
-    box.hidden = false;
+    body.innerHTML = `<div class="md-body">${mdToHtml(msg)}</div>`;
+    show(true);
   } else if (reviewingKey === key) {
     body.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>正在审阅「' + esc(label) + '」…';
-    box.hidden = false;
+    show(true);
   } else {
-    box.hidden = true;
+    show(false);
   }
 }
 function artCards(job) {
@@ -786,7 +911,13 @@ async function loadPreview() {
   const base = previewTarget(name) === "input" ? "/inputs/" : "/artifacts/";
   const res = await fetch("/api/jobs/"+current+base+encodeURIComponent(name), {headers: headers()});
   const text = await res.text();
-  $("preview").textContent = res.ok ? text.slice(0, 20000) : ("加载失败: " + text);
+  if (!res.ok) {
+    $("preview").textContent = "加载失败: " + text;
+  } else if (/\.(md|markdown)$/i.test(name)) {
+    $("preview").innerHTML = `<div class="md-body">${mdToHtml(text.slice(0, 20000))}</div>`;
+  } else {
+    $("preview").textContent = text.slice(0, 20000);
+  }
   syncPreviewButtons();
   renderReviewBox();
 }
@@ -1024,6 +1155,50 @@ box.addEventListener("drop", e => {
   e.preventDefault(); box.classList.remove("drag");
   addFiles(e.dataTransfer.files);
 });
+
+// 抽屉分区拖拽：左缘调宽度、审阅区上方调高度（localStorage 记忆）
+function dragify(handle, onMove) {
+  handle.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    handle.classList.add("dragging");
+    const move = ev => onMove(ev);
+    const stop = () => {
+      handle.classList.remove("dragging");
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    };
+    // 监听 window：指针移出把手后仍能跟踪，也不依赖 setPointerCapture
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+  });
+}
+(function setupDrawerSplits() {
+  const drawer = $("drawer"), reviewBox = $("reviewBox");
+  let saveT = 0;
+  const save = (k, v) => {
+    clearTimeout(saveT);
+    saveT = setTimeout(() => { try { localStorage.setItem(k, String(v)); } catch (e) {} }, 300);
+  };
+  const savedW = +localStorage.getItem("qagent_drawer_w") || 0;
+  if (savedW >= 320) drawer.style.width = Math.min(savedW, 720) + "px";
+  const savedH = +localStorage.getItem("qagent_review_h") || 0;
+  if (savedH >= 80) { reviewBox.style.height = savedH + "px"; reviewBox.style.maxHeight = "none"; }
+  dragify($("hsplit"), ev => {
+    const rect = drawer.getBoundingClientRect();
+    const w = Math.max(320, Math.min(rect.right - ev.clientX, 720));
+    drawer.style.width = w + "px";
+    save("qagent_drawer_w", Math.round(w));
+  });
+  dragify($("vsplit"), ev => {
+    const rect = drawer.getBoundingClientRect();
+    const h = Math.max(80, Math.min(rect.bottom - ev.clientY, rect.height - 150));
+    reviewBox.style.height = h + "px";
+    reviewBox.style.maxHeight = "none";
+    save("qagent_review_h", Math.round(h));
+  });
+})();
 
 showWelcome();
 </script>
