@@ -280,6 +280,19 @@
       position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 40;
       display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none;
     }
+    .app-list { max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 6px; margin: 4px 0 4px; }
+    .app-item {
+      display: flex; flex-direction: column; gap: 1px; text-align: left;
+      border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+      padding: 8px 12px; cursor: pointer;
+    }
+    .app-item:hover { border-color: var(--accent); background: var(--accent-soft); }
+    .app-item .n { font-size: 14px; font-weight: 560; }
+    .app-item .p { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .app-item .tag {
+      display: inline-block; font-size: 10px; color: var(--accent);
+      border: 1px solid #c9d4ff; border-radius: 4px; padding: 0 4px; margin-left: 6px; vertical-align: 1px;
+    }
     .review-box {
       border-top: 1px dashed var(--line); margin-top: 0; flex-shrink: 0;
       display: flex; flex-direction: column; min-height: 0; max-height: 45%;
@@ -465,6 +478,15 @@
   </div>
 </div>
 <div class="toasts" id="toasts"></div>
+<div class="modal-bg" id="openWith">
+  <div class="modal">
+    <h3 id="openWithTitle">选择打开方式</h3>
+    <div class="app-list" id="appList"></div>
+    <div class="row-end">
+      <button class="chip-btn" id="openWithCancel" type="button">取消</button>
+    </div>
+  </div>
+</div>
 <div class="modal-bg" id="dlg">
   <div class="modal">
     <h3 id="dlgTitle">确认</h3>
@@ -757,17 +779,45 @@ function artCards(job) {
 async function openInEditor(name) {
   if (!current) return;
   const target = previewTarget(name) === "input" ? "input" : "artifact";
+  let data;
   try {
-    await api(`/api/jobs/${current}/open`, {
-      method: "POST",
-      headers: {...headers(), "Content-Type": "application/json"},
-      body: JSON.stringify({target, name})
-    });
-    toast("已用本机默认应用打开 " + name);
+    data = await api(`/api/jobs/${current}/open-with?target=${target}&name=${encodeURIComponent(name)}`);
   } catch (e) {
-    toast(e.message || "打开失败", "err");
+    toast(e.message || "获取打开方式失败", "err");
+    return;
   }
+  const ext = data.ext || (name.split(".").pop() || "").toLowerCase();
+  const last = localStorage.getItem("qagent_open_last_" + ext) || "";
+  const rows = [{name: null, label: "系统默认应用", path: "按文件类型关联的默认应用"}]
+    .concat((data.apps || []).map(a => ({name: a.name, label: a.name, path: a.path})));
+  rows.sort((a, b) => (b.name === last ? 1 : 0) - (a.name === last ? 1 : 0));
+  $("openWithTitle").textContent = `选择打开方式 · ${name}`;
+  $("appList").innerHTML = rows.map(r =>
+    `<button class="app-item" type="button" data-app="${r.name === null ? "" : esc(r.name)}">
+      <span class="n">${esc(r.label)}${r.name && r.name === last ? '<span class="tag">上次</span>' : ""}</span>
+      <span class="p">${esc(r.path)}</span>
+    </button>`).join("");
+  $("openWith").classList.add("show");
+  $("appList").querySelectorAll(".app-item").forEach(b => {
+    b.onclick = async () => {
+      const app = b.dataset.app || null;
+      $("openWith").classList.remove("show");
+      try {
+        await api(`/api/jobs/${current}/open`, {
+          method: "POST",
+          headers: {...headers(), "Content-Type": "application/json"},
+          body: JSON.stringify({target, name, app})
+        });
+        if (app) localStorage.setItem("qagent_open_last_" + ext, app);
+        toast("已用" + (app || "系统默认应用") + "打开 " + name);
+      } catch (e) {
+        toast(e.message || "打开失败", "err");
+      }
+    };
+  });
 }
+$("openWithCancel").onclick = () => $("openWith").classList.remove("show");
+$("openWith").onclick = e => { if (e.target === $("openWith")) $("openWith").classList.remove("show"); };
 function thinkingCard(job) {
   const live = isBusyStatus(job.status);
   const failed = job.status === "failed";

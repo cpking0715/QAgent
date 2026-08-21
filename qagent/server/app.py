@@ -184,6 +184,20 @@ def create_handler(service: QAgentService):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+            if len(parts) == 5 and parts[1:3] == ["api", "jobs"] and parts[4] == "open-with":
+                # GET /api/jobs/{id}/open-with?target=&name= —— 枚举本机打开方式
+                try:
+                    query = parse_qs(parsed.query)
+                    _json(self, 200, service.list_open_with(
+                        parts[3],
+                        (query.get("target") or ["artifact"])[0],
+                        unquote((query.get("name") or [""])[0]),
+                    ))
+                except FileNotFoundError as exc:
+                    _json(self, 404, {"error": str(exc)})
+                except (RuntimeError, ValueError) as exc:
+                    _json(self, 400, {"error": str(exc)})
+                return
             if len(parts) == 6 and parts[1:3] == ["api", "jobs"] and parts[4] == "artifacts":
                 try:
                     file_path = service.artifact_path(parts[3], unquote(parts[5]))
@@ -261,13 +275,15 @@ def create_handler(service: QAgentService):
                     _json(self, 400, {"error": str(exc)})
                 return
             if len(parts) == 5 and parts[1:3] == ["api", "jobs"] and parts[4] == "open":
-                # POST /api/jobs/{id}/open {target, name} —— 本地编辑器打开
+                # POST /api/jobs/{id}/open {target, name, app?} —— 本地应用打开
                 try:
                     body = _read_json(self)
+                    app = body.get("app")
                     _json(self, 200, service.open_file(
                         parts[3],
                         str(body.get("target") or "artifact"),
                         str(body.get("name") or ""),
+                        app=str(app) if isinstance(app, str) and app else None,
                     ))
                 except FileNotFoundError as exc:
                     _json(self, 404, {"error": str(exc)})
