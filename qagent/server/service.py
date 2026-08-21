@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import logging
 import os
+import platform
+import re
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
@@ -326,6 +329,36 @@ class QAgentService:
             raise FileNotFoundError(safe)
         return read_document(path)
 
+    # 打开本地文件前的文件名白名单：字母/数字/中文/点横线下划线，
+    # 保证任何 shell 元字符都进不了 subprocess 参数
+    _SAFE_FILENAME = re.compile(r"^[\w.\-\u4e00-\u9fff]+$")
+
+    def open_file(self, job_id: str, target: str, name: str) -> dict:
+        """本地场景：用系统默认文本编辑器打开任务文件（替代下载）。"""
+        if target not in {"input", "artifact"}:
+            raise ValueError("target 必须是 input 或 artifact")
+        safe = Path(name).name
+        if not self._SAFE_FILENAME.fullmatch(safe):
+            raise ValueError(f"非法文件名: {safe!r}")
+        if target == "input":
+            path = self.store.input_dir(job_id) / safe
+            if not path.is_file():
+                raise FileNotFoundError(safe)
+        else:
+            path = self.artifact_path(job_id, safe)  # 复用产物目录安全校验
+        system = platform.system()
+        if system == "Darwin":
+            proc = subprocess.run(["open", "-t", str(path)], capture_output=True, timeout=10)
+        elif system == "Windows":
+            os.startfile(str(path))  # type: ignore[attr-defined]
+            return {"ok": True}
+        else:
+            proc = subprocess.run(["xdg-open", str(path)], capture_output=True, timeout=10)
+        if proc.returncode != 0:
+            detail = proc.stderr.decode("utf-8", errors="ignore")[:200].strip()
+            raise RuntimeError(f"打开失败: {detail or proc.returncode}")
+        return {"ok": True}
+
     def start_review(self, job_id: str, target: str, name: str) -> dict:
         """AI 审阅（类似 agent 的一次深读）：带交叉参考材料，结果落对话流。"""
         if target not in {"input", "artifact"}:
@@ -378,32 +411,51 @@ class QAgentService:
     ) -> None:
         lock = self.store.job_lock(job_id)
         with lock:
+            def _cancelled() -> bool:
+                return bool(self.store.load(job_id).cancel_requested)
+
+            def _finalize() -> None:
+                def _mark(m) -> None:
+                    if m.status == "revising":
+                        if m.cancel_requested:
+                            m.status = "cancelled"
+                            m.cancel_requested = False
+                        else:
+                            m.status = "ready" if not m.awaiting_scope else "uploaded"
+
+                self.store.update(job_id, _mark)
+
+            def _finish(message: str, log: str = "") -> None:
+                self.store.append_chat(job_id, "assistant", message)
+                if log:
+                    self.store.append_log(job_id, log)
+                _finalize()
+
             try:
                 prompt = build_review_prompt(label, content, context)
                 llm = self._llm()
                 if hasattr(llm, "should_cancel"):
-                    llm.should_cancel = lambda: bool(
-                        self.store.load(job_id).cancel_requested
-                    )
+                    llm.should_cancel = _cancelled
                 text = llm.complete(REVIEW_SYSTEM, prompt).strip()
-                if not text:
-                    raise RuntimeError("审阅结果为空")
-                message = f"【审阅·{label}】\n\n{text}"
+            except LLMCancelled:
+                # 用户终止：不再落审阅结果
+                _finish(f"【审阅·{label}】\n\n已终止", f"AI 审阅已终止：{label}")
+                return
             except Exception as exc:  # 审阅失败也落对话，用户可见原因
-                message = f"【审阅·{label}】\n\n审阅失败：{exc}"
-                logger.warning("任务 %s 审阅失败: %s", job_id, exc)
-            self.store.append_chat(job_id, "assistant", message)
-            self.store.append_log(job_id, f"AI 审阅完成：{label}")
-
-            def _finalize(m) -> None:
-                if m.status == "revising":
-                    if m.cancel_requested:
-                        m.status = "cancelled"
-                        m.cancel_requested = False
-                    else:
-                        m.status = "ready" if not m.awaiting_scope else "uploaded"
-
-            self.store.update(job_id, _finalize)
+                if _cancelled():
+                    _finish(f"【审阅·{label}】\n\n已终止", f"AI 审阅已终止：{label}")
+                else:
+                    logger.warning("任务 %s 审阅失败: %s", job_id, exc)
+                    _finish(f"【审阅·{label}】\n\n审阅失败：{exc}")
+                return
+            if _cancelled() or not text:
+                note = "已终止" if _cancelled() else "审阅失败：结果为空"
+                _finish(f"【审阅·{label}】\n\n{note}")
+                return
+            _finish(
+                f"【审阅·{label}】\n\n{text}",
+                f"AI 审阅完成：{label}",
+            )
 
     def _reject_if_locked(self, job_id: str) -> None:
         """流水线/修订占用任务锁时立即拒绝，而不是阻塞等锁到其结束。"""

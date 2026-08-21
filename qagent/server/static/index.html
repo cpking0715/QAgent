@@ -141,8 +141,10 @@
     .deliverables { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
     .deliv {
       border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
-      background: #fafbfc;
+      background: #fafbfc; cursor: pointer;
     }
+    .deliv:hover { border-color: #c9d4ff; background: #f6f9ff; }
+    .deliv .open-editor { height: 24px; padding: 0 8px; font-size: 12px; flex-shrink: 0; }
     .deliv-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
     .deliv-head strong { font-size: 14px; }
     .deliv-head a { font-size: 12px; color: var(--accent); white-space: nowrap; }
@@ -743,13 +745,28 @@ function artCards(job) {
   const rows = job.deliverables || [];
   if (!rows.length) return "";
   return `<div class="deliverables">${rows.map(row =>
-    `<div class="deliv">
-      <div class="deliv-head"><strong>${esc(row.step)}. ${esc(row.title)}</strong><a href="/api/jobs/${job.id}/artifacts/${encodeURIComponent(row.file)}" target="_blank">下载</a></div>
+    `<div class="deliv" data-file="${esc(row.file)}" title="点击预览">
+      <div class="deliv-head"><strong>${esc(row.step)}. ${esc(row.title)}</strong>
+        <button class="chip-btn open-editor" type="button" data-file="${esc(row.file)}" title="用系统默认编辑器打开">编辑器打开</button></div>
       <div class="file">${esc(row.file)}</div>
       <p><b>作用</b>　${esc(row.role)}</p>
       ${row.content ? `<p><b>内容</b>　${esc(row.content)}</p>` : ""}
     </div>`
   ).join("")}</div>`;
+}
+async function openInEditor(name) {
+  if (!current) return;
+  const target = previewTarget(name) === "input" ? "input" : "artifact";
+  try {
+    await api(`/api/jobs/${current}/open`, {
+      method: "POST",
+      headers: {...headers(), "Content-Type": "application/json"},
+      body: JSON.stringify({target, name})
+    });
+    toast("已在系统编辑器中打开 " + name);
+  } catch (e) {
+    toast(e.message || "打开失败", "err");
+  }
 }
 function thinkingCard(job) {
   const live = isBusyStatus(job.status);
@@ -769,7 +786,7 @@ function thinkingCard(job) {
     ${stepperHTML(job)}
     ${last ? `<div class="log-line">${esc(last)}</div>` : ""}
     ${logsBlock}
-    ${["ready","failed","cancelled"].includes(job.status) ? artCards(job) : ""}
+    ${["ready","failed","cancelled"].includes(job.status) || Object.keys(job.artifacts || {}).length ? artCards(job) : ""}
     ${job.status === "ready" && job.stage && job.stage.done !== "export" ? `
       <div><button type="button" class="phase-next"
         data-from="${esc(job.stage.from)}" data-stop="${esc(job.stage.stop_after || "")}">
@@ -823,6 +840,22 @@ function renderThread(job) {
       $("previewName").value = b.dataset.name;
       loadPreview();
     };
+  });
+  $("msgs").querySelectorAll(".deliv").forEach(el => {
+    el.onclick = () => {
+      const name = el.dataset.file;
+      $("drawer").classList.add("open");
+      setArtifactEditing(false);
+      if (/\.(md|markdown)$/i.test(name) && [...$("previewName").options].some(o => o.value === name)) {
+        $("previewName").value = name;
+        loadPreview();
+      } else {
+        toast("非文本产物不支持预览，已可用「编辑器打开」查看");
+      }
+    };
+  });
+  $("msgs").querySelectorAll(".open-editor").forEach(b => {
+    b.onclick = ev => { ev.stopPropagation(); openInEditor(b.dataset.file); };
   });
   const mds = Object.values(job.artifacts || {}).filter(f => String(f).endsWith(".md"));
   const ins = job.inputs || [];

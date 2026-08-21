@@ -260,6 +260,20 @@ def create_handler(service: QAgentService):
                 except (FileNotFoundError, RuntimeError, ValueError) as exc:
                     _json(self, 400, {"error": str(exc)})
                 return
+            if len(parts) == 5 and parts[1:3] == ["api", "jobs"] and parts[4] == "open":
+                # POST /api/jobs/{id}/open {target, name} —— 本地编辑器打开
+                try:
+                    body = _read_json(self)
+                    _json(self, 200, service.open_file(
+                        parts[3],
+                        str(body.get("target") or "artifact"),
+                        str(body.get("name") or ""),
+                    ))
+                except FileNotFoundError as exc:
+                    _json(self, 404, {"error": str(exc)})
+                except (RuntimeError, ValueError) as exc:
+                    _json(self, 400, {"error": str(exc)})
+                return
             if len(parts) == 5 and parts[1:3] == ["api", "jobs"] and parts[4] == "review":
                 # POST /api/jobs/{id}/review {target, name} —— AI 审阅文件
                 try:
