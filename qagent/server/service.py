@@ -30,6 +30,31 @@ PHASE_HINT = (
 )
 _CANCEL_WORDS = {"终止", "停止", "取消生成", "取消任务"}
 
+# 上传文件名 → 产物标准名：命中即视为"已写好的产物"，原样落盘直接复用
+_SEED_ALIASES = {
+    "test-requirements.md": "test-requirements.md",
+    "测试需求.md": "test-requirements.md",
+    "test-plan.md": "test-plan.md",
+    "测试方案.md": "test-plan.md",
+    "risk.md": "risk.md",
+    "风险.md": "risk.md",
+    "coverage-matrix.md": "coverage-matrix.md",
+    "覆盖矩阵.md": "coverage-matrix.md",
+    "testcases.md": "testcases.md",
+    "测试用例.md": "testcases.md",
+}
+_SEED_LABELS = {
+    "test-requirements.md": "测试需求",
+    "test-plan.md": "测试方案",
+    "risk.md": "风险",
+    "coverage-matrix.md": "覆盖矩阵",
+    "testcases.md": "测试用例",
+}
+SEED_NOTE = (
+    "检测到已写好的 {labels}，已直接作为当前产物（不会被覆盖）。"
+    "接下来缺什么补什么：自动生成缺失的上游文档，再继续后续步骤。"
+)
+
 
 def _public_job(store: JobStore, job_id: str) -> dict:
     data = store.load(job_id).to_public()
@@ -57,7 +82,7 @@ def _next_stage(store: JobStore, job_id: str) -> dict | None:
         return {
             "done": "test_requirements",
             "label": "生成测试方案（含风险与覆盖矩阵）",
-            "from": "test_plan",
+            "from": "auto",  # auto：已有的方案/风险直接复用，只补缺失
             "stop_after": "coverage_matrix",
         }
     if not has("testcases.md"):
@@ -99,9 +124,31 @@ class QAgentService:
 
     def create_job(self, owner: str, uploads: list[tuple[str, bytes]], title: str = "") -> dict:
         meta = self.store.create(owner=owner, title=title)
+        out = self.store.output_dir(meta.id)
+        seeded: list[str] = []
         for name, data in uploads:
             self.store.save_upload(meta.id, name, data)
-        awaiting = not inputs_include_test_requirements(self.store, meta.id)
+            canonical = _SEED_ALIASES.get(Path(name).name.lower())
+            if canonical and canonical not in seeded:
+                (out / canonical).write_bytes(data)
+                seeded.append(canonical)
+        if seeded:
+            if "test-requirements.md" in seeded:
+                # 已写好的测试需求直接出导图，交付物列表立即可见
+                try:
+                    from qagent.exporters.mindmap import (
+                        write_requirements_drawio,
+                        write_requirements_xmind,
+                    )
+
+                    write_requirements_drawio(out / "test-requirements.md", out / "test-requirements.drawio")
+                    write_requirements_xmind(out / "test-requirements.md", out / "test-requirements.xmind")
+                except (OSError, ValueError) as exc:
+                    logger.warning("种子需求导图生成失败 job=%s: %s", meta.id, exc)
+            self.store.refresh_artifacts(meta.id)
+            labels = "、".join(_SEED_LABELS.get(c, c) for c in seeded)
+            self.store.append_chat(meta.id, "assistant", SEED_NOTE.format(labels=labels))
+        awaiting = not (seeded or inputs_include_test_requirements(self.store, meta.id))
         self.store.update(meta.id, lambda m: setattr(m, "awaiting_scope", awaiting))
         if awaiting:
             self.store.append_chat(meta.id, "assistant", SCOPE_DRAFT)
@@ -122,14 +169,19 @@ class QAgentService:
     def delete_job(self, job_id: str) -> None:
         self.store.delete(job_id)
 
+    _VALID_FROM = {
+        "requirements", "auto", "testcases",
+        "test_requirements", "test_plan", "risk", "coverage_matrix",
+    }
+
     def start_run(
         self, job_id: str, from_step: str = "requirements", stop_after: str | None = None,
     ) -> dict:
         meta = self.store.load(job_id)
         if meta.status in {"running", "revising"}:
             raise RuntimeError("任务正在运行")
-        if from_step not in {"requirements", "auto", "testcases"}:
-            from_step = "requirements"
+        if from_step not in self._VALID_FROM:
+            raise ValueError(f"无效起点: {from_step}（可选: {sorted(self._VALID_FROM)}）")
         if from_step == "testcases" and not self.store.can_resume_from_matrix(job_id):
             raise RuntimeError("尚未生成覆盖矩阵，不能只跑矩阵后")
         self.store.clear_logs(job_id)

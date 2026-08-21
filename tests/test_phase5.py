@@ -114,7 +114,7 @@ def test_service_stage_progression(tmp_path, mock_responses):
     assert got["status"] == "ready", got["status"]
     stage = got["stage"]
     assert stage["done"] == "test_requirements"
-    assert stage["from"] == "test_plan"
+    assert stage["from"] == "auto"
     assert not (store.output_dir(job_id) / "test-plan.md").exists()
 
     # 继续段 2
