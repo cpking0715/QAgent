@@ -12,8 +12,15 @@ from qagent.agent.llm import LLMCancelled, LLMClient, OpenAILLM
 from qagent.agent.runner import JobCancelled, QAgentRunner
 from qagent.config import resolve_config
 from qagent.deliverables import list_deliverables
-from qagent.ingest import ingest
-from qagent.server.chat import run_chat
+from qagent.ingest import ingest, read_document
+from qagent.server.chat import (
+    REVIEW_SYSTEM,
+    build_review_prompt,
+    clip_text,
+    review_context_names,
+    review_label,
+    run_chat,
+)
 from qagent.server.jobs import ARTIFACT_NAMES, JobStore
 from qagent.server.scope import SCOPE_DRAFT, inputs_include_test_requirements
 from qagent.server.tools import job_config
@@ -311,6 +318,100 @@ class QAgentService:
 
             self.store.update(job_id, _failed)
 
+    def input_file_text(self, job_id: str, name: str) -> str:
+        """输入文档预览：md/txt 直读，pdf/docx 抽取文本。"""
+        safe = Path(name).name
+        path = self.store.input_dir(job_id) / safe
+        if not path.is_file():
+            raise FileNotFoundError(safe)
+        return read_document(path)
+
+    def start_review(self, job_id: str, target: str, name: str) -> dict:
+        """AI 审阅（类似 agent 的一次深读）：带交叉参考材料，结果落对话流。"""
+        if target not in {"input", "artifact"}:
+            raise ValueError("target 必须是 input 或 artifact")
+        safe = Path(name).name
+        self._reject_if_locked(job_id)
+        lock = self.store.job_lock(job_id)
+        with lock:
+            meta = self.store.load(job_id)
+            if meta.status == "running":
+                raise RuntimeError("流水线运行中，稍后再审阅")
+            if meta.status == "revising":
+                raise RuntimeError("正在处理上一条消息，请稍候")
+            content, context = self._review_material(job_id, target, safe)
+            label = review_label(target, safe)
+            self.store.update(job_id, lambda m: setattr(m, "status", "revising"))
+            self.store.append_log(job_id, f"AI 审阅中：{label}")
+        self._chat_pool.submit(self._run_review, job_id, label, content, context)
+        return self.get_job(job_id)
+
+    def _review_material(
+        self, job_id: str, target: str, safe: str,
+    ) -> tuple[str, list[tuple[str, str, str]]]:
+        out = self.store.output_dir(job_id)
+        if target == "input":
+            content = self.input_file_text(job_id, safe)
+            produced = sorted(
+                p.name for p in out.iterdir() if p.is_file() and not p.name.startswith(".")
+            )
+            context = [("产物清单", "当前已生成产物", "\n".join(produced) or "暂无")]
+            return content, context
+        if not safe.endswith(".md"):
+            raise ValueError("仅支持审阅 Markdown 产物")
+        path = out / safe
+        if not path.is_file():
+            raise FileNotFoundError(safe)
+        content = path.read_text(encoding="utf-8")
+        context = []
+        for ref in review_context_names(safe):
+            ref_path = out / ref
+            if ref_path.is_file():
+                context.append((
+                    "参考产物", review_label("artifact", ref),
+                    clip_text(ref_path.read_text(encoding="utf-8")),
+                ))
+        return content, context
+
+    def _run_review(
+        self, job_id: str, label: str, content: str, context: list[tuple[str, str, str]],
+    ) -> None:
+        lock = self.store.job_lock(job_id)
+        with lock:
+            try:
+                prompt = build_review_prompt(label, content, context)
+                llm = self._llm()
+                if hasattr(llm, "should_cancel"):
+                    llm.should_cancel = lambda: bool(
+                        self.store.load(job_id).cancel_requested
+                    )
+                text = llm.complete(REVIEW_SYSTEM, prompt).strip()
+                if not text:
+                    raise RuntimeError("审阅结果为空")
+                message = f"【审阅·{label}】\n\n{text}"
+            except Exception as exc:  # 审阅失败也落对话，用户可见原因
+                message = f"【审阅·{label}】\n\n审阅失败：{exc}"
+                logger.warning("任务 %s 审阅失败: %s", job_id, exc)
+            self.store.append_chat(job_id, "assistant", message)
+            self.store.append_log(job_id, f"AI 审阅完成：{label}")
+
+            def _finalize(m) -> None:
+                if m.status == "revising":
+                    if m.cancel_requested:
+                        m.status = "cancelled"
+                        m.cancel_requested = False
+                    else:
+                        m.status = "ready" if not m.awaiting_scope else "uploaded"
+
+            self.store.update(job_id, _finalize)
+
+    def _reject_if_locked(self, job_id: str) -> None:
+        """流水线/修订占用任务锁时立即拒绝，而不是阻塞等锁到其结束。"""
+        lock = self.store.job_lock(job_id)
+        if not lock.acquire(blocking=False):
+            raise RuntimeError("任务正在运行，稍后再试")
+        lock.release()
+
     def start_chat(self, job_id: str, message: str) -> dict:
         """立刻落盘用户消息并异步回复，避免 Web 端空等 LLM。"""
         text = (message or "").strip()
@@ -318,6 +419,7 @@ class QAgentService:
             raise ValueError("消息不能为空")
         if text in _CANCEL_WORDS:
             return self.cancel_job(job_id)
+        self._reject_if_locked(job_id)
         lock = self.store.job_lock(job_id)
         with lock:
             meta = self.store.load(job_id)
@@ -339,6 +441,7 @@ class QAgentService:
         if text in _CANCEL_WORDS:
             public = self.cancel_job(job_id)
             return {"ok": True, "reply": "已请求终止当前任务。", "notes": [], "rerun": None, "job": public}
+        self._reject_if_locked(job_id)
         lock = self.store.job_lock(job_id)
         with lock:
             meta = self.store.load(job_id)

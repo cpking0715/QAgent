@@ -65,6 +65,70 @@ def system_prompt(config: QAgentConfig) -> str:
     )
 
 
+# ---- AI 审阅（类似 agent 的文档评审：带交叉参考材料的一次深读）----
+
+REVIEW_SYSTEM = (
+    "你是资深测试架构师，负责审阅测试文档并给出可执行的改进意见。"
+    "输出使用简体中文 Markdown；条目要具体、可执行，问题必须引用原文位置；"
+    "不要复述文档内容，不要输出与审阅无关的话。"
+)
+
+_REVIEW_LABELS = {
+    "test-requirements.md": "测试需求",
+    "test-plan.md": "测试方案",
+    "risk.md": "风险分析",
+    "coverage-matrix.md": "覆盖矩阵",
+    "testcases.md": "测试用例",
+    "qa-review.md": "QA Review",
+}
+
+# 审阅某产物时附带的前置产物（交叉检查追溯与口径一致性）
+_REVIEW_CONTEXT = {
+    "test-plan.md": ("test-requirements.md",),
+    "risk.md": ("test-plan.md",),
+    "coverage-matrix.md": ("test-plan.md", "risk.md"),
+    "testcases.md": ("coverage-matrix.md",),
+    "qa-review.md": ("coverage-matrix.md", "testcases.md"),
+}
+
+_REVIEW_CONTEXT_BUDGET = 6000  # 每份参考材料的字符预算
+
+
+def review_label(target: str, name: str) -> str:
+    """审阅对象展示名：产物用中文名，输入文件用原文件名。"""
+    if target == "input":
+        return name
+    return _REVIEW_LABELS.get(name, name)
+
+
+def review_context_names(artifact: str) -> tuple[str, ...]:
+    return _REVIEW_CONTEXT.get(artifact, ())
+
+
+def clip_text(text: str, budget: int = _REVIEW_CONTEXT_BUDGET) -> str:
+    if len(text) <= budget:
+        return text
+    return text[:budget] + "\n…（过长已截断）"
+
+
+def build_review_prompt(
+    label: str, content: str, context: list[tuple[str, str, str]],
+) -> str:
+    """拼装审阅 prompt：待审文档 + 交叉参考材料 + 输出格式要求。"""
+    parts = [f"# 待审阅文档：{label}\n\n{content}"]
+    for kind, ctx_label, ctx_text in context:
+        parts.append(f"# 参考材料（{kind}）：{ctx_label}\n\n{ctx_text}")
+    parts.append(
+        f"请审阅《{label}》，输出 Markdown：\n\n"
+        "## 总评\n（2-3 句，先给结论）\n\n"
+        "## 主要问题\n按严重程度排序逐条列出，每条包含：**问题** / **位置**（引用原文片段）/"
+        "**修改建议**（具体到可直接执行）。\n\n"
+        "## 遗漏与风险\n结合参考材料交叉检查：遗漏场景、口径不一致、需求-场景-用例追溯断链。\n\n"
+        "## 快速改进清单\n3-5 条可直接执行的动作项。"
+    )
+    return "\n\n---\n\n".join(parts)
+
+
 def _parse_actions(text: str) -> dict[str, Any]:
     raw = extract_document(text)
     fenced = re.search(r"```json\s*\n(.*)\n```", raw, re.DOTALL)
