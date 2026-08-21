@@ -265,10 +265,19 @@ def test_cli_mindmap_converts_nested_list(tmp_path):
     import zipfile
 
     with zipfile.ZipFile(dest_xmind) as zf:
-        assert "content.json" in zf.namelist()
+        names = zf.namelist()
+        # XMind 2020+ 强校验 metadata.json，manifest 需登记全部条目
+        assert "content.json" in names
+        assert "metadata.json" in names
+        assert "manifest.json" in names
         content = json.loads(zf.read("content.json"))
+        metadata = json.loads(zf.read("metadata.json"))
+        manifest = json.loads(zf.read("manifest.json"))
     assert content[0]["rootTopic"]["title"] == "根"
     assert content[0]["rootTopic"]["children"]["attached"][0]["title"] == "子"
+    assert metadata["creator"]["name"] == "QAgent"
+    assert metadata["activeSheetId"] == content[0]["id"]
+    assert set(manifest["file-entries"]) == {"content.json", "metadata.json"}
 
 
 def test_valid_cases_pass(schema, requirement_ids):
