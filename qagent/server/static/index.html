@@ -237,6 +237,54 @@
     .dot.ready { background: var(--ok); }
     .dot.failed { background: var(--err); }
     .dot.cancelled { background: var(--muted); }
+    .stepper { display: flex; margin-top: 12px; }
+    .step { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; position: relative; }
+    .step::before {
+      content: ""; position: absolute; top: 11px;
+      left: calc(-50% + 13px); width: calc(100% - 26px); height: 2px;
+      background: var(--line);
+    }
+    .step:first-child::before { display: none; }
+    .step.done::before { background: var(--ok); }
+    .step .nd {
+      width: 24px; height: 24px; border-radius: 50%;
+      border: 1.5px solid var(--line); background: var(--surface); color: var(--muted);
+      display: grid; place-items: center; font-size: 11px; font-weight: 600;
+      position: relative; z-index: 1;
+    }
+    .step .lb { font-size: 11px; color: var(--muted); white-space: nowrap; }
+    .step.done .nd { background: var(--ok); border-color: var(--ok); color: #fff; }
+    .step.done .lb { color: var(--text); }
+    .step.act .nd { border-color: var(--accent); color: var(--accent); }
+    .step.act .lb { color: var(--accent); font-weight: 600; }
+    .stepper.live .step.act .nd { animation: stepPulse 1.6s infinite; }
+    @keyframes stepPulse {
+      0%, 100% { box-shadow: 0 0 0 3px rgba(51,112,255,.14); }
+      50% { box-shadow: 0 0 0 6px rgba(51,112,255,.24); }
+    }
+    .step.err .nd { background: var(--err); border-color: var(--err); color: #fff; }
+    .step.err .lb { color: var(--err); }
+    .step.cut .nd { background: var(--warn); border-color: var(--warn); color: #fff; }
+    .step.cut .lb { color: var(--warn); }
+    .log-toggle { border: 0; background: transparent; color: var(--accent); font-size: 12px; padding: 4px 0 0; }
+    .log-toggle:hover { text-decoration: underline; }
+    .logs-full {
+      margin-top: 6px; max-height: 220px; overflow: auto;
+      background: #fafbfc; border: 1px solid var(--line); border-radius: 10px;
+      padding: 8px 10px; font-size: 12px; color: var(--muted); line-height: 1.7;
+    }
+    .danger { background: var(--err); color: #fff; border: 0; border-radius: 10px; height: 36px; padding: 0 14px; }
+    .toasts {
+      position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 40;
+      display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none;
+    }
+    .toast {
+      background: #1f2329; color: #fff; font-size: 13px;
+      padding: 9px 16px; border-radius: 10px; box-shadow: var(--shadow);
+      animation: toastIn .18s ease-out;
+    }
+    .toast.err { background: var(--err); }
+    @keyframes toastIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
     @media (max-width: 900px) {
       .sidebar { display: none; }
       .drawer { position: absolute; inset: 0; width: auto; z-index: 10; }
@@ -319,11 +367,24 @@
     </div>
   </div>
 </div>
+<div class="toasts" id="toasts"></div>
+<div class="modal-bg" id="dlg">
+  <div class="modal">
+    <h3 id="dlgTitle">确认</h3>
+    <p id="dlgMsg" style="color:var(--muted);font-size:14px;margin:0 0 4px"></p>
+    <input id="dlgInput" hidden autocomplete="off">
+    <div class="row-end">
+      <button class="chip-btn" id="dlgCancel" type="button">取消</button>
+      <button class="primary" id="dlgOk" type="button">确定</button>
+    </div>
+  </div>
+</div>
 <script>
 const $ = id => document.getElementById(id);
 const STATUS = { uploaded: "待生成", running: "生成中", ready: "已完成", revising: "修订中", failed: "失败", cancelled: "已终止" };
 let current = null, timer = null, pending = [], queuedChat = "", jobBusy = false;
 let evtSource = null, lastListAt = 0;
+let lastJob = null, logsExpanded = false;
 function closeEvents() { if (evtSource) { try { evtSource.close(); } catch (e) {} evtSource = null; } }
 function connectEvents(id) {
   closeEvents();
@@ -364,14 +425,84 @@ async function api(path, opt={}, retried) {
   const ct = res.headers.get("content-type") || "";
   const data = ct.includes("json") ? await res.json().catch(() => ({})) : {};
   if (res.status === 401 && !retried) {
-    const token = window.prompt("服务开启了访问口令，请输入 Token");
-    if (token && token.trim()) {
-      localStorage.setItem("qagent_token", token.trim());
+    const token = await uiDialog({ title: "需要访问口令", input: true, placeholder: "输入访问 Token", okText: "连接" });
+    if (token) {
+      localStorage.setItem("qagent_token", token);
       return api(path, opt, true);
     }
   }
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
+}
+function toast(msg, type) {
+  const el = document.createElement("div");
+  el.className = "toast" + (type === "err" ? " err" : "");
+  el.textContent = msg;
+  $("toasts").appendChild(el);
+  setTimeout(() => {
+    el.style.transition = "opacity .25s";
+    el.style.opacity = "0";
+    setTimeout(() => el.remove(), 260);
+  }, 3200);
+}
+let dlgResolve = null;
+function uiDialog(opt = {}) {
+  return new Promise(resolve => {
+    dlgResolve = resolve;
+    $("dlgTitle").textContent = opt.title || "确认";
+    const msg = $("dlgMsg");
+    msg.textContent = opt.message || "";
+    msg.style.display = opt.message ? "" : "none";
+    const inp = $("dlgInput");
+    inp.hidden = !opt.input;
+    inp.value = "";
+    inp.placeholder = opt.placeholder || "";
+    const ok = $("dlgOk");
+    ok.textContent = opt.okText || "确定";
+    ok.className = opt.danger ? "danger" : "primary";
+    $("dlgCancel").textContent = opt.cancelText || "取消";
+    $("dlg").classList.add("show");
+    if (opt.input) setTimeout(() => inp.focus(), 60);
+  });
+}
+function closeDlg(val) {
+  $("dlg").classList.remove("show");
+  if (dlgResolve) { const r = dlgResolve; dlgResolve = null; r(val); }
+}
+$("dlgOk").onclick = () => closeDlg($("dlgInput").hidden ? true : $("dlgInput").value.trim());
+$("dlgCancel").onclick = () => closeDlg($("dlgInput").hidden ? false : null);
+$("dlg").onclick = e => { if (e.target === $("dlg")) closeDlg($("dlgInput").hidden ? false : null); };
+document.addEventListener("keydown", e => {
+  if (!$("dlg").classList.contains("show")) return;
+  if (e.key === "Escape") closeDlg($("dlgInput").hidden ? false : null);
+  if (e.key === "Enter") { e.preventDefault(); $("dlgOk").click(); }
+});
+const STEPS = [
+  ["需求", "test_requirements"], ["方案", "test_plan"], ["风险", "risk"],
+  ["矩阵", "coverage_matrix"], ["用例", "testcases"], ["评审", "qa_review"], ["导出", "xlsx"],
+];
+function stepperHTML(job) {
+  const arts = job.artifacts || {};
+  const live = job.status === "running";
+  const started = live || ["ready", "failed", "cancelled"].includes(job.status) || Object.keys(arts).length;
+  if (!started) return "";
+  const m = /(\d+)\s*\/\s*\d+/.exec(job.current_step || "");
+  let idx = m ? Math.min(Math.max(+m[1] - 1, 1), STEPS.length) : 0;
+  if (!idx) {
+    let n = 1;
+    STEPS.forEach((s, i) => { if (arts[s[1]]) n = Math.max(n, i + 2); });
+    idx = Math.min(n, STEPS.length);
+  }
+  const cells = STEPS.map((s, i) => {
+    const k = i + 1;
+    let cls = "", mark = String(k);
+    if (job.status === "ready" || arts[s[1]] || (live && k < idx)) { cls = "done"; mark = "✓"; }
+    else if (live && k === idx) cls = "act";
+    else if (job.status === "failed" && k === idx) { cls = "err"; mark = "×"; }
+    else if (job.status === "cancelled" && k === idx) { cls = "cut"; mark = "–"; }
+    return `<div class="step ${cls}"><span class="nd">${mark}</span><span class="lb">${s[0]}</span></div>`;
+  }).join("");
+  return `<div class="stepper${live ? " live" : ""}">${cells}</div>`;
 }
 function syncSend() {
   const btn = $("send");
@@ -427,13 +558,18 @@ function thinkingCard(job) {
   const logs = (job.logs || []).filter(line => failed || !/\bERROR:/i.test(line));
   const last = logs.slice(-1)[0] || (live ? (job.status === "revising" ? "正在回复…" : "正在阅读文档并规划测试…") : "");
   const errors = failed ? (job.error || []).filter(Boolean) : [];
+  const logsBlock = logs.length > 1
+    ? `<button class="log-toggle" type="button">${logsExpanded ? "收起日志" : "展开全部日志 " + logs.length + " 条 ▾"}</button>` +
+      (logsExpanded ? `<div class="logs-full">${logs.map(l => `<div>${esc(l)}</div>`).join("")}</div>` : "")
+    : "";
   return `<div class="status-card">
     ${live ? `<span class="dots"><i></i><i></i><i></i></span>` : ""}
     <strong>${esc(STATUS[job.status] || job.status)}</strong>
     ${job.case_count != null ? ` · ${job.case_count} 条用例` : ""}
     ${errors.length ? `<div style="color:var(--err);margin-top:6px">${esc(errors.join("; "))}</div>` : ""}
-    ${job.current_step ? `<div class="log-line">进度 ${esc(job.current_step)}</div>` : ""}
+    ${stepperHTML(job)}
     ${last ? `<div class="log-line">${esc(last)}</div>` : ""}
+    ${logsBlock}
     ${["ready","failed","cancelled"].includes(job.status) ? artCards(job) : ""}
     ${job.status === "ready" && job.stage && job.stage.done !== "export" ? `
       <div><button type="button" class="phase-next"
@@ -446,6 +582,8 @@ function pendingReplyHTML() {
   return `<div class="status-card"><span class="dots"><i></i><i></i><i></i></span><strong>正在回复…</strong></div>`;
 }
 function renderThread(job) {
+  if (!lastJob || lastJob.id !== job.id) logsExpanded = false;
+  lastJob = job;
   jobBusy = isBusyStatus(job.status);
   const canResume = !!job.can_resume_cases;
   $("runFull").disabled = jobBusy;
@@ -470,6 +608,9 @@ function renderThread(job) {
   $("msgs").scrollTop = $("msgs").scrollHeight;
   $("msgs").querySelectorAll(".phase-next").forEach(b => {
     b.onclick = () => run(b.dataset.from, b.dataset.stop || null);
+  });
+  $("msgs").querySelectorAll(".log-toggle").forEach(b => {
+    b.onclick = () => { logsExpanded = !logsExpanded; renderThread(lastJob); };
   });
   const mds = Object.values(job.artifacts || {}).filter(f => String(f).endsWith(".md"));
   $("previewName").innerHTML = mds.map(f => `<option>${esc(f)}</option>`).join("");
@@ -504,11 +645,16 @@ async function refreshJobs() {
 }
 async function removeJob(id, ev) {
   ev.stopPropagation();
-  if (!confirm("删除后不可恢复，确定删除该任务？")) return;
+  const ok = await uiDialog({
+    title: "删除任务",
+    message: "删除后任务文件不可恢复，确定删除？",
+    okText: "删除", danger: true,
+  });
+  if (!ok) return;
   try {
     await api("/api/jobs/"+id, {method:"DELETE"});
   } catch (e) {
-    alert(e.message || "删除失败");
+    toast(e.message || "删除失败", "err");
     return;
   }
   if (current === id) {
@@ -533,7 +679,7 @@ async function select(id) {
       method:"POST",
       headers:{...headers(),"Content-Type":"application/json"},
       body: JSON.stringify({message:msg})
-    }).catch(e => alert(e.message || "发送失败"));
+    }).catch(e => toast(e.message || "发送失败", "err"));
     if (current === id) return select(id);
     return;
   }
@@ -570,7 +716,7 @@ $("saveArtifact").onclick = async () => {
       headers:{...headers(),"Content-Type":"application/json"},
       body: JSON.stringify({content: $("previewEdit").value})
     });
-  } catch (e) { alert(e.message || "保存失败"); return; }
+  } catch (e) { toast(e.message || "保存失败", "err"); return; }
   setArtifactEditing(false);
   loadPreview();
   select(current);  // 刷新阶段与产物状态
@@ -582,7 +728,7 @@ async function createAndRun() {
   pending = []; renderPending(); syncSend();
   const res = await fetch("/api/jobs", {method:"POST", headers: headers(), body: fd});
   const data = await res.json();
-  if (!res.ok) { alert(data.error || "创建失败"); return; }
+  if (!res.ok) { toast(data.error || "创建失败", "err"); return; }
   await select(data.id);
   if (!data.awaiting_scope) {
     // 分段工作流：先只生成测试需求，确认/修改后再继续方案与用例
@@ -628,7 +774,7 @@ async function send() {
     });
   } catch (e) {
     jobBusy = false;
-    alert(e.message || "发送失败");
+    toast(e.message || "发送失败", "err");
   }
   if (current === id) select(id);
 }
@@ -662,11 +808,15 @@ $("moreBtn").onclick = ev => {
   $("moreBox").classList.toggle("open");
 };
 document.addEventListener("click", () => $("moreBox").classList.remove("open"));
-$("runFull").onclick = () => {
+$("runFull").onclick = async () => {
   $("moreBox").classList.remove("open");
   if (!current) return;
-  if (!confirm("将按需求重新生成，已有方案和用例会被覆盖。确定？")) return;
-  run("requirements");
+  const ok = await uiDialog({
+    title: "重新整跑",
+    message: "将按需求重新生成，已有方案和用例会被覆盖。",
+    okText: "重新生成", danger: true,
+  });
+  if (ok) run("requirements");
 };
 $("runCases").onclick = () => {
   $("moreBox").classList.remove("open");
@@ -678,7 +828,7 @@ async function cancelCurrent() {
   try {
     await api("/api/jobs/"+current+"/cancel", {method:"POST"});
   } catch (e) {
-    alert(e.message || "终止失败");
+    toast(e.message || "终止失败", "err");
   }
   select(current);
 }
@@ -717,7 +867,7 @@ $("saveSettings").onclick = async () => {
     }
     $("settings").classList.remove("show");
   } catch (e) {
-    alert(e.message || "保存失败");
+    toast(e.message || "保存失败", "err");
   }
 };
 
