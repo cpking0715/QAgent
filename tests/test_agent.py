@@ -41,8 +41,11 @@ def test_user_scope_prompt_prefers_user_range():
     config = resolve_config()
     source = "# 合并\n\n## 测试需求\n不测：性能测试\n"
     _, user = build_test_requirements_prompt(source, Path("req.md"), config)
-    assert "用户测试范围优先" in user
+    # 范围说明约束「测不测」：不测项不得进清单
+    assert "用户测试范围说明" in user
     assert "不得写入" in user
+    # 但不约束「写多细」：清单仍要求从文档详尽提取
+    assert "宁多勿漏" in user
 
 
 def test_agent_run_mock(tmp_path, mock_responses):
