@@ -674,20 +674,28 @@ function stepperHTML(job) {
   const live = job.status === "running";
   const started = live || ["ready", "failed", "cancelled"].includes(job.status) || Object.keys(arts).length;
   if (!started) return "";
+  // 完成态严格按产物存在性判断：ready 只代表当前段跑完，不代表全流程完成
+  const doneAt = STEPS.map(s => !!arts[s[1]]);
+  // 运行中的当前步编号来自 current_step（"N/9 描述"），其之前的步即使产物缺失也视为已完成
   const m = /(\d+)\s*\/\s*\d+/.exec(job.current_step || "");
   let idx = m ? Math.min(Math.max(+m[1] - 1, 1), STEPS.length) : 0;
-  if (!idx) {
-    let n = 1;
-    STEPS.forEach((s, i) => { if (arts[s[1]]) n = Math.max(n, i + 2); });
-    idx = Math.min(n, STEPS.length);
+  if (live && idx) {
+    for (let k = 1; k < idx; k++) doneAt[k - 1] = true;
   }
+  if (!idx) {
+    // 无编号（如"阶段完成：…"）：定位到第一个未完成步
+    const firstMissing = doneAt.findIndex(d => !d) + 1;
+    idx = firstMissing || STEPS.length;
+  }
+  const complete = doneAt.every(Boolean);
   const cells = STEPS.map((s, i) => {
     const k = i + 1;
     let cls = "", mark = String(k);
-    if (job.status === "ready" || arts[s[1]] || (live && k < idx)) { cls = "done"; mark = "✓"; }
+    if (doneAt[i]) { cls = "done"; mark = "✓"; }
     else if (live && k === idx) cls = "act";
     else if (job.status === "failed" && k === idx) { cls = "err"; mark = "×"; }
     else if (job.status === "cancelled" && k === idx) { cls = "cut"; mark = "–"; }
+    else if (job.status === "ready" && !complete && k === idx) cls = "act"; // 分段等待确认：下一步高亮（无脉冲）
     return `<div class="step ${cls}"><span class="nd">${mark}</span><span class="lb">${s[0]}</span></div>`;
   }).join("");
   return `<div class="stepper${live ? " live" : ""}">${cells}</div>`;
