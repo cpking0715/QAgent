@@ -356,22 +356,33 @@ def _xmind_topic(node: dict) -> dict:
 
 def _render_xmind(node: dict) -> bytes:
     title = str(node.get("text") or "导图")
+    sheet_id = uuid4().hex
     content = [
         {
-            "id": uuid4().hex,
+            "id": sheet_id,
             "class": "sheet",
             "title": title,
             "rootTopic": _xmind_topic(node),
         }
     ]
+    # XMind 2020+ 打开时强校验 metadata.json（缺失即报
+    # "MUST have a metadata.json file"），manifest 需登记全部条目
+    metadata = {
+        "creator": {"name": "QAgent", "version": "1.0"},
+        "activeSheetId": sheet_id,
+    }
     manifest = {
-        "file-entries": {"content.json": {}},
+        "file-entries": {"content.json": {}, "metadata.json": {}},
     }
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(
             "content.json",
             json.dumps(content, ensure_ascii=False, indent=2),
+        )
+        zf.writestr(
+            "metadata.json",
+            json.dumps(metadata, ensure_ascii=False, indent=2),
         )
         zf.writestr(
             "manifest.json",
