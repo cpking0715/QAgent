@@ -270,6 +270,9 @@ class QAgentService:
             self.store.update(
                 job_id, lambda m, v=value: setattr(m, "current_step", v),
             )
+            # 每步开始时上一步产物已落盘：即时刷新产物清单，
+            # SSE 会把更新推给前端（交付卡片/步骤条绿勾/预览下拉实时出现）
+            self.store.refresh_artifacts(job_id)
 
         def should_cancel() -> bool:
             # load 走内存缓存，不再每条日志读盘
