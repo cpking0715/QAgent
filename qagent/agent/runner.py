@@ -468,6 +468,8 @@ class QAgentRunner:
         state = _FlowState()
 
         start = self._resolve_start(start_from)
+        # auto（缺什么补什么）：已有产物直接复用，不重新生成也不覆盖
+        auto_keep = start_from == "auto"
 
         def reached(checkpoint: str) -> bool:
             """checkpoint 步骤是否在本次执行范围内（含起点）。"""
@@ -475,13 +477,33 @@ class QAgentRunner:
                 return True
             return _EXEC_ORDER.index(checkpoint) >= _EXEC_ORDER.index(start)
 
+        def reuse_existing(key: str) -> bool:
+            """auto 模式：产物文件已存在则复用其内容并跳过该步生成。"""
+            label, path_fn, step_enum = self._UPSTREAM_PATHS[key]
+            path = path_fn(self.config)
+            if not path.is_file():
+                return False
+            if key == "coverage_matrix":
+                try:
+                    state.matrix_rows = parse_coverage_matrix(path)
+                except ValueError:
+                    self._log(f"WARNING: 已有「{label}」无法解析，将重新生成")
+                    return False
+            setattr(state, _STATE_ATTR[key], path.read_text(encoding="utf-8"))
+            mark_step(self.config, step_enum, requirement_path)
+            result.steps_completed.append(key)
+            self._log(f"「{label}」已存在，直接复用（不重新生成）")
+            return True
+
         def halted(checkpoint: str) -> bool:
             """分段模式：checkpoint 执行完毕后是否应停下等待人工确认。"""
             if stop_after is None or checkpoint != stop_after:
                 return False
             result.stopped_after = checkpoint
             result.success = True
-            self._log(f"已生成至「{checkpoint}」，可修改产物后继续（from={checkpoint} 之后步骤）")
+            result.case_count = len(state.cases)
+            result.artifacts = self._collect_artifacts()
+            self._log(f"已生成至「{checkpoint}」，可修改产物后继续下一阶段")
             return True
 
         if start is not None:
@@ -497,8 +519,10 @@ class QAgentRunner:
                 result.steps_completed.append(key)
             if start == "testcases":
                 self._log("续跑：复用已有测试需求/方案/风险/矩阵，从 Step 6 生成用例")
-            else:
+            elif reused:
                 self._log(f"续跑：复用 {len(reused)} 份上游产物，从 {start} 继续")
+            else:
+                self._log("从测试需求开始生成")
             self._export_mindmap()
             if start == "testcases" and self.config.testcases_path.is_file():
                 try:
@@ -507,36 +531,42 @@ class QAgentRunner:
                 except ValueError as exc:
                     self._log(f"WARNING: 已有用例无法解析，将整批重生成: {exc}")
 
-        def halted(checkpoint: str) -> bool:
-            """分段模式：checkpoint 执行完毕后是否应停下等待人工确认。"""
-            if stop_after is None or checkpoint != stop_after:
-                return False
-            result.stopped_after = checkpoint
-            result.success = True
-            result.case_count = len(state.cases)
-            result.artifacts = self._collect_artifacts()
-            self._log(f"已生成至「{checkpoint}」，可修改产物后继续下一阶段")
-            return True
-
         if reached("test_requirements"):
-            self._step_requirements(state, requirement_text, requirement_path, result)
+            if not (auto_keep and reuse_existing("test_requirements")):
+                self._step_requirements(state, requirement_text, requirement_path, result)
             if halted("test_requirements"):
                 return result
         if reached("test_plan"):
-            self._step_plan(state, requirement_text, result)
+            if not (auto_keep and reuse_existing("test_plan")):
+                self._step_plan(state, requirement_text, result)
             if halted("test_plan"):
                 return result
         if reached("risk"):
-            self._step_risk(state, result)
+            if not (auto_keep and reuse_existing("risk")):
+                self._step_risk(state, result)
             if halted("risk"):
                 return result
         if reached("coverage_matrix"):
-            if not self._step_matrix(state, result):
-                return result
+            if not (auto_keep and reuse_existing("coverage_matrix")):
+                if not self._step_matrix(state, result):
+                    return result
             if halted("coverage_matrix"):
                 return result
 
-        self._step_testcases(state, result)
+        reuse_cases = False
+        if auto_keep and self.config.testcases_path.is_file():
+            try:
+                existing = parse_cases(self.config.testcases_path)
+            except ValueError as exc:
+                self._log(f"WARNING: 已有用例无法解析，将重新生成: {exc}")
+            else:
+                if existing:
+                    state.cases = existing
+                    result.steps_completed.append("testcases")
+                    self._log(f"用例已存在（{len(existing)} 条），复用并直接评审/校验/导出")
+                    reuse_cases = True
+        if not reuse_cases:
+            self._step_testcases(state, result)
         if halted("testcases"):
             return result
         self._step_review(state, result)

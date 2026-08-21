@@ -317,8 +317,12 @@
         <div class="more" id="moreBox">
           <button class="chip-btn" id="moreBtn" type="button">···</button>
           <div class="more-menu">
-            <button type="button" id="runFull">重新整跑</button>
-            <button type="button" id="runCases">只跑矩阵后</button>
+            <button type="button" id="runFull">重新整跑（覆盖全部）</button>
+            <button type="button" id="runAuto" hidden>补齐缺失产物（保留已有）</button>
+            <button type="button" id="runFromPlan" hidden>从测试方案开始重生成</button>
+            <button type="button" id="runFromRisk" hidden>从风险开始重生成</button>
+            <button type="button" id="runFromMatrix" hidden>从覆盖矩阵开始重生成</button>
+            <button type="button" id="runCases">只重生成用例（复用矩阵）</button>
             <button type="button" id="toggleDrawer">产物预览</button>
           </div>
         </div>
@@ -337,7 +341,7 @@
           </button>
         </div>
       </div>
-      <div class="hint">支持 md / txt / pdf / docx · 上传后先确认测试范围，生成中点方块可停止</div>
+      <div class="hint">支持 md / txt / pdf / docx · 已写好的测试需求/方案/风险/矩阵可直接上传，缺什么补什么</div>
     </div>
   </section>
   <aside class="drawer" id="drawer">
@@ -586,9 +590,14 @@ function renderThread(job) {
   lastJob = job;
   jobBusy = isBusyStatus(job.status);
   const canResume = !!job.can_resume_cases;
+  const arts = job.artifacts || {};
   $("runFull").disabled = jobBusy;
   $("runCases").disabled = jobBusy || !canResume;
   $("runCases").title = canResume ? "复用矩阵，只重生成用例" : (jobBusy ? "正在运行" : "尚未生成覆盖矩阵");
+  $("runAuto").hidden = jobBusy || !Object.keys(arts).length;
+  $("runFromPlan").hidden = jobBusy || !arts.test_plan;
+  $("runFromRisk").hidden = jobBusy || !arts.risk;
+  $("runFromMatrix").hidden = jobBusy || !arts.coverage_matrix;
   syncSend();
   $("threadBar").hidden = false;
   $("title").textContent = job.title || "未命名任务";
@@ -601,7 +610,7 @@ function renderThread(job) {
     const av = role === "assistant" ? `<div class="avatar">QA</div>` : "";
     parts.push(`<div class="row ${role}">${av}<div class="bubble">${esc(m.content)}</div></div>`);
   }
-  if (job.status !== "uploaded" || !(job.chat || []).length) {
+  if (job.status !== "uploaded" || !(job.chat || []).length || Object.keys(job.artifacts || {}).length) {
     parts.push(`<div class="row assistant"><div class="avatar">QA</div>${thinkingCard(job)}</div>`);
   }
   $("msgs").innerHTML = parts.join("");
@@ -731,11 +740,15 @@ async function createAndRun() {
   if (!res.ok) { toast(data.error || "创建失败", "err"); return; }
   await select(data.id);
   if (!data.awaiting_scope) {
-    // 分段工作流：先只生成测试需求，确认/修改后再继续方案与用例
+    // 分段工作流：从 auto 起点缺什么补什么（已上传的测试需求/方案等直接复用）
+    const arts = data.artifacts || {};
+    let stop = "test_requirements";
+    if (arts.test_requirements) stop = "coverage_matrix";
+    if (arts.coverage_matrix) stop = null;
     await api("/api/jobs/"+data.id+"/run", {
       method:"POST",
       headers:{...headers(),"Content-Type":"application/json"},
-      body: JSON.stringify({from:"requirements", stop_after:"test_requirements"})
+      body: JSON.stringify({from:"auto", stop_after: stop})
     }).catch(() => {});
     await select(data.id);
   }
@@ -818,6 +831,24 @@ $("runFull").onclick = async () => {
   });
   if (ok) run("requirements");
 };
+$("runAuto").onclick = () => {
+  $("moreBox").classList.remove("open");
+  if ($("runAuto").hidden) return;
+  run("auto");
+};
+async function _confirmRegenFrom(label, fromStep) {
+  $("moreBox").classList.remove("open");
+  if (!current) return;
+  const ok = await uiDialog({
+    title: "从" + label + "重生成",
+    message: "「" + label + "」及其之后的产物会被重新生成并覆盖，之前的产物保留。",
+    okText: "开始重生成", danger: true,
+  });
+  if (ok) run(fromStep);
+}
+$("runFromPlan").onclick = () => _confirmRegenFrom("测试方案", "test_plan");
+$("runFromRisk").onclick = () => _confirmRegenFrom("风险", "risk");
+$("runFromMatrix").onclick = () => _confirmRegenFrom("覆盖矩阵", "coverage_matrix");
 $("runCases").onclick = () => {
   $("moreBox").classList.remove("open");
   if ($("runCases").disabled) return;
