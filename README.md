@@ -360,7 +360,7 @@ qagent run input/requirement-example.md --out output --from testcases
 
 | 文件 | 含义 |
 |------|------|
-| `test-requirements.md` / `test-requirements.drawio` | 测试需求（Draw.io 用 diagrams.net 打开） |
+| `test-requirements.md` / `test-requirements.xmind` | 测试需求（XMind 用 XMind 2020+ 打开；需要 Draw.io 时可 `qagent mindmap` 手动转） |
 | `test-plan.md` | 测试方案 |
 | `risk.md` | 风险分析 |
 | `coverage-matrix.md` | 覆盖矩阵 |

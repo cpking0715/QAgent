@@ -23,7 +23,6 @@ from qagent.agent.prompts import (
 )
 from qagent.config import QAgentConfig
 from qagent.exporters import export_cases_xlsx
-from qagent.exporters.mindmap import write_requirements_drawio
 from qagent.parsing import (
     SC_ID_RE,
     CoverageRow,
@@ -212,15 +211,7 @@ class QAgentRunner:
         path.write_text(content, encoding="utf-8")
 
     def _export_mindmap(self) -> None:
-        try:
-            write_requirements_drawio(
-                self.config.test_requirements_path,
-                self.config.test_requirements_drawio_path,
-            )
-            if self.config.test_requirements_drawio_path.is_file():
-                self._log(f"已写出 {self.config.test_requirements_drawio_path.name}")
-        except (OSError, ValueError) as exc:
-            self._log(f"WARNING: test-requirements.drawio 未生成: {exc}")
+        # drawio 已不再自动输出（文件用本地默认应用打开）；需要时 qagent mindmap 手动转
         try:
             from qagent.exporters.mindmap import write_requirements_xmind
 
@@ -583,7 +574,6 @@ class QAgentRunner:
     def _collect_artifacts(self) -> dict[str, Path]:
         return {
             "test_requirements": self.config.test_requirements_path,
-            "test_requirements_drawio": self.config.test_requirements_drawio_path,
             "test_requirements_xmind": self.config.test_requirements_xmind_path,
             "test_plan": self.config.test_plan_path,
             "risk": self.config.risk_path,

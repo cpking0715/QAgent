@@ -146,10 +146,6 @@ class QAgentConfig:
         return self.output_dir / "testcases.xlsx"
 
     @property
-    def test_requirements_drawio_path(self) -> Path:
-        return self.output_dir / "test-requirements.drawio"
-
-    @property
     def test_requirements_xmind_path(self) -> Path:
         return self.output_dir / "test-requirements.xmind"
 

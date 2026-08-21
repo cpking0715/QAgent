@@ -13,12 +13,6 @@ GUIDE: tuple[dict[str, str], ...] = (
         "content": "从 PRD / 设计抽出测试范围、功能点、规则与优先级，作为后续方案和用例的覆盖依据。",
     },
     {
-        "key": "test_requirements_drawio",
-        "title": "需求导图",
-        "role": "测试需求的可视化",
-        "content": "与 test-requirements.md 同一棵树（范围、功能要点、API、边界与异常等），用 diagrams.net 打开。",
-    },
-    {
         "key": "test_requirements_xmind",
         "title": "需求导图（XMind）",
         "role": "测试需求的可视化",

@@ -47,7 +47,7 @@ def test_create_job_seeds_recognized_artifacts(tmp_path):
     arts = job["artifacts"] or {}
     assert {"test_requirements", "test_plan", "coverage_matrix"} <= set(arts)
     # 已写好需求 → 导图立即可下载
-    assert (out / "test-requirements.drawio").is_file()
+    assert (out / "test-requirements.xmind").is_file()
     # 阶段推导：矩阵已就绪 → 下一步是用例段
     assert job["stage"]["done"] == "coverage_matrix"
     assert job["stage"]["from"] == "testcases"

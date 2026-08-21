@@ -141,7 +141,7 @@ def test_save_artifact_edits_markdown_only(tmp_path, mock_responses):
 
     updated = service.save_artifact(job.id, "test-requirements.md", "# 改后需求\n\n- 补充要点\n")
     assert "改后需求" in (out / "test-requirements.md").read_text(encoding="utf-8")
-    assert (out / "test-requirements.drawio").is_file()  # 导图随正文更新
+    assert (out / "test-requirements.xmind").is_file()  # 导图随正文更新
     assert updated["artifacts"].get("test_requirements")
 
     with pytest.raises(ValueError, match="Markdown"):

@@ -146,12 +146,8 @@ class QAgentService:
             if "test-requirements.md" in seeded:
                 # 已写好的测试需求直接出导图，交付物列表立即可见
                 try:
-                    from qagent.exporters.mindmap import (
-                        write_requirements_drawio,
-                        write_requirements_xmind,
-                    )
+                    from qagent.exporters.mindmap import write_requirements_xmind
 
-                    write_requirements_drawio(out / "test-requirements.md", out / "test-requirements.drawio")
                     write_requirements_xmind(out / "test-requirements.md", out / "test-requirements.xmind")
                 except (OSError, ValueError) as exc:
                     logger.warning("种子需求导图生成失败 job=%s: %s", meta.id, exc)
@@ -334,7 +330,7 @@ class QAgentService:
     _SAFE_FILENAME = re.compile(r"^[\w.\-\u4e00-\u9fff]+$")
 
     def open_file(self, job_id: str, target: str, name: str) -> dict:
-        """本地场景：用系统默认文本编辑器打开任务文件（替代下载）。"""
+        """本地场景：按文件类型交给系统默认应用打开（xlsx→表格、md→编辑器、pdf→阅读器）。"""
         if target not in {"input", "artifact"}:
             raise ValueError("target 必须是 input 或 artifact")
         safe = Path(name).name
@@ -348,7 +344,8 @@ class QAgentService:
             path = self.artifact_path(job_id, safe)  # 复用产物目录安全校验
         system = platform.system()
         if system == "Darwin":
-            proc = subprocess.run(["open", "-t", str(path)], capture_output=True, timeout=10)
+            # 不带 -t：交给系统按文件类型关联的默认应用，由用户本机设置决定
+            proc = subprocess.run(["open", str(path)], capture_output=True, timeout=10)
         elif system == "Windows":
             os.startfile(str(path))  # type: ignore[attr-defined]
             return {"ok": True}
@@ -579,12 +576,8 @@ class QAgentService:
         if safe == "test-requirements.md":
             # 需求导图随正文更新
             try:
-                from qagent.exporters.mindmap import (
-                    write_requirements_drawio,
-                    write_requirements_xmind,
-                )
+                from qagent.exporters.mindmap import write_requirements_xmind
 
-                write_requirements_drawio(path, self.store.output_dir(job_id) / "test-requirements.drawio")
                 write_requirements_xmind(path, self.store.output_dir(job_id) / "test-requirements.xmind")
             except (OSError, ValueError) as exc:
                 logger.warning("需求导图更新失败 job=%s: %s", job_id, exc)
