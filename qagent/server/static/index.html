@@ -348,7 +348,17 @@
       width: 3px; height: 40px; border-radius: 2px; background: var(--line);
     }
     .hsplit:hover::after, .hsplit.dragging::after { background: var(--accent); }
-    @media (max-width: 900px) { .hsplit { display: none; } }
+    /* 侧边栏：右缘拖宽 + 任务条目元信息 */
+    .sidebar { position: relative; }
+    .side-split { position: absolute; right: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 3; }
+    .side-split::after {
+      content: ""; position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+      width: 3px; height: 40px; border-radius: 2px; background: var(--line);
+    }
+    .side-split:hover::after, .side-split.dragging::after { background: var(--accent); }
+    .job .sub { color: #8f959e; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .job small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    @media (max-width: 900px) { .hsplit, .side-split { display: none; } }
     .toast {
       background: #1f2329; color: #fff; font-size: 13px;
       padding: 9px 16px; border-radius: 10px; box-shadow: var(--shadow);
@@ -365,6 +375,7 @@
 <body>
 <div class="app">
   <aside class="sidebar">
+    <div class="side-split" id="sideSplit" title="拖动调整宽度"></div>
     <div class="brand">
       <div class="logo">QA</div>
       <div><strong>QAgent</strong><span>测试方案助手</span></div>
@@ -849,17 +860,54 @@ function showWelcome() {
 async function refreshJobs() {
   const data = await api("/api/jobs");
   const jobs = data.jobs || [];
-  $("jobs").innerHTML = jobs.length ? jobs.map(j =>
-    `<div class="job ${current===j.id?"active":""}" data-id="${esc(j.id)}">
-      <div class="body">
-        <span class="t">${esc(j.title || j.id)}</span>
-        <small><span class="dot ${esc(j.status)}"></span>${esc(STATUS[j.status] || j.status)}</small>
-      </div>
-      <button class="del" type="button" data-id="${esc(j.id)}" title="删除">×</button>
-    </div>`
-  ).join("") : `<div style="color:var(--muted);padding:8px 12px;font-size:13px">还没有任务</div>`;
+  const groups = { "今天": [], "昨天": [], "更早": [] };
+  for (const j of jobs) groups[dayBucket(j.created_at)].push(j);
+  const sections = Object.entries(groups).filter(([, arr]) => arr.length).map(([label, arr]) =>
+    `<h4>${label}</h4>` + arr.map(j => jobItemHTML(j)).join("")
+  ).join("");
+  $("jobs").innerHTML = sections ||
+    `<h4>历史任务</h4><div style="color:var(--muted);padding:8px 12px;font-size:13px">还没有任务</div>`;
   $("jobs").querySelectorAll(".job").forEach(el => el.onclick = () => select(el.dataset.id));
   $("jobs").querySelectorAll(".del").forEach(el => el.onclick = ev => removeJob(el.dataset.id, ev));
+}
+function jobItemHTML(j) {
+  const status = [];
+  if (j.case_count != null) status.push(j.case_count + " 条用例");
+  const narts = Object.keys(j.artifacts || {}).length;
+  if (narts) status.push(narts + " 个产物");
+  return `<div class="job ${current===j.id?"active":""}" data-id="${esc(j.id)}">
+    <div class="body">
+      <span class="t" title="${esc(j.title || j.id)}">${esc(j.title || j.id)}</span>
+      <small><span class="dot ${esc(j.status)}"></span>${esc((STATUS[j.status] || j.status) + (status.length ? " · " + status.join(" · ") : ""))}</small>
+      <span class="sub">${esc(fmtTime(j.created_at))}</span>
+    </div>
+    <button class="del" type="button" data-id="${esc(j.id)}" title="删除">×</button>
+  </div>`;
+}
+function _sameDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+function dayBucket(iso) {
+  const d = new Date(iso || "");
+  if (isNaN(d)) return "更早";
+  const now = new Date();
+  if (_sameDay(d, now)) return "今天";
+  const yest = new Date(now);
+  yest.setDate(now.getDate() - 1);
+  if (_sameDay(d, yest)) return "昨天";
+  return "更早";
+}
+function fmtTime(iso) {
+  const d = new Date(iso || "");
+  if (isNaN(d)) return "";
+  const now = new Date();
+  const hm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  if (_sameDay(d, now)) return "今天 " + hm;
+  const yest = new Date(now);
+  yest.setDate(now.getDate() - 1);
+  if (_sameDay(d, yest)) return "昨天 " + hm;
+  if (d.getFullYear() === now.getFullYear()) return (d.getMonth() + 1) + "月" + d.getDate() + "日 " + hm;
+  return d.getFullYear() + "年" + (d.getMonth() + 1) + "月" + d.getDate() + "日";
 }
 async function removeJob(id, ev) {
   ev.stopPropagation();
@@ -1175,7 +1223,7 @@ function dragify(handle, onMove) {
   });
 }
 (function setupDrawerSplits() {
-  const drawer = $("drawer"), reviewBox = $("reviewBox");
+  const drawer = $("drawer"), reviewBox = $("reviewBox"), sidebar = $("sidebar") || document.querySelector(".sidebar");
   let saveT = 0;
   const save = (k, v) => {
     clearTimeout(saveT);
@@ -1185,6 +1233,8 @@ function dragify(handle, onMove) {
   if (savedW >= 320) drawer.style.width = Math.min(savedW, 720) + "px";
   const savedH = +localStorage.getItem("qagent_review_h") || 0;
   if (savedH >= 80) { reviewBox.style.height = savedH + "px"; reviewBox.style.maxHeight = "none"; }
+  const savedSide = +localStorage.getItem("qagent_sidebar_w") || 0;
+  if (savedSide >= 220) sidebar.style.width = Math.min(savedSide, 460) + "px";
   dragify($("hsplit"), ev => {
     const rect = drawer.getBoundingClientRect();
     const w = Math.max(320, Math.min(rect.right - ev.clientX, 720));
@@ -1197,6 +1247,12 @@ function dragify(handle, onMove) {
     reviewBox.style.height = h + "px";
     reviewBox.style.maxHeight = "none";
     save("qagent_review_h", Math.round(h));
+  });
+  dragify($("sideSplit"), ev => {
+    const rect = sidebar.getBoundingClientRect();
+    const w = Math.max(220, Math.min(ev.clientX - rect.left, 460));
+    sidebar.style.width = w + "px";
+    save("qagent_sidebar_w", Math.round(w));
   });
 })();
 
